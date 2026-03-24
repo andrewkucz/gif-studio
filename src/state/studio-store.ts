@@ -4,7 +4,9 @@ import type { TimelineThumbnail } from "@/lib/media/thumbnail-service"
 
 export type RangeInputMode = "start-length" | "start-end"
 export type GifLoopMode = "infinite" | "count"
-export type GifColorPreset = "original" | "balanced" | "compact"
+export type GifColorPreset = "original" | "balanced" | "compact" | "custom"
+export type GifSizeMode = "original" | "custom"
+export type GifSizeUnit = "pixels" | "percent"
 
 export interface SourceVideo {
   id: string
@@ -22,9 +24,12 @@ export interface SourceVideo {
 
 export interface GifSettings {
   fileName: string
+  sizeMode: GifSizeMode
+  sizeUnit: GifSizeUnit
   width: number
   fps: number
   colorPreset: GifColorPreset
+  customColorCount: number
   loopMode: GifLoopMode
   loopCount: number
 }
@@ -80,9 +85,12 @@ interface StudioState {
 
 const defaultSettings: GifSettings = {
   fileName: "untitled.gif",
+  sizeMode: "original",
+  sizeUnit: "pixels",
   width: 480,
-  fps: 12,
-  colorPreset: "original",
+  fps: 10,
+  colorPreset: "balanced",
+  customColorCount: 128,
   loopMode: "infinite",
   loopCount: 1,
 }

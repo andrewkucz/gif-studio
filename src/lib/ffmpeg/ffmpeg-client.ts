@@ -23,6 +23,12 @@ interface GenerateGifOptions {
   onProgress?: (progress: number) => void
 }
 
+interface ExtractThumbnailOptions {
+  sourceFile: File
+  time: number
+  width: number
+}
+
 const METADATA_DURATION_PATTERN = /Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/
 const METADATA_VIDEO_SIZE_PATTERN = /(\d{2,5})x(\d{2,5})/
 const METADATA_VIDEO_FPS_PATTERN = /(\d+(?:\.\d+)?)\s(?:fps|tbr)\b/
@@ -222,6 +228,56 @@ class FFmpegClient {
       await ffmpeg.deleteFile(inputName).catch((error) => {
         console.error("FFmpeg cleanup error", error)
       })
+    }
+  }
+
+  async extractThumbnail({ sourceFile, time, width }: ExtractThumbnailOptions): Promise<Blob> {
+    const ffmpeg = await this.getInstance()
+    const extension = getFileExtension(sourceFile.name)
+    const inputName = `thumb-${crypto.randomUUID()}.${extension || "mp4"}`
+    const outputName = `thumb-${crypto.randomUUID()}.jpg`
+
+    try {
+      await ffmpeg.writeFile(inputName, await fetchFile(sourceFile))
+      const exitCode = await ffmpeg.exec([
+        "-ss",
+        Math.max(time, 0).toFixed(2),
+        "-i",
+        inputName,
+        "-frames:v",
+        "1",
+        "-vf",
+        `scale=${Math.max(Math.round(width), 1)}:-1:flags=lanczos`,
+        "-q:v",
+        "2",
+        outputName,
+      ])
+
+      if (exitCode !== 0) {
+        throw new Error("FFmpeg could not generate a timeline thumbnail for this video.")
+      }
+
+      const fileData = await ffmpeg.readFile(outputName)
+      if (!(fileData instanceof Uint8Array)) {
+        throw new Error("FFmpeg returned an unexpected thumbnail payload.")
+      }
+
+      const safeBytes = new Uint8Array(fileData.byteLength)
+      safeBytes.set(fileData)
+
+      return new Blob([safeBytes], {
+        type: "image/jpeg",
+      })
+    } finally {
+      await Promise.allSettled([ffmpeg.deleteFile(inputName), ffmpeg.deleteFile(outputName)]).then(
+        (results) => {
+          results.forEach((result) => {
+            if (result.status === "rejected") {
+              console.error("FFmpeg cleanup error", result.reason)
+            }
+          })
+        }
+      )
     }
   }
 

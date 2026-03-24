@@ -3,7 +3,6 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { ChevronDownIcon, LocateFixedIcon } from "lucide-react"
 import { useMaskInput } from "use-mask-input"
 
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -16,6 +15,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import {
   formatDuration,
+  formatFrameRate,
   formatTimeInputValue,
   getFormattedTimeShape,
   getTrimDuration,
@@ -453,23 +453,6 @@ export function StudioTimeline({
               />
             </div>
 
-            <div className="flex flex-wrap items-center gap-2 text-xs">
-              <Badge variant={isTrimEnabled ? "secondary" : "outline"}>
-                {isTrimEnabled
-                  ? `${formatDuration(selectionDuration)} selected`
-                  : `${formatDuration(duration)} full video`}
-              </Badge>
-              {isTrimEnabled ? (
-                <>
-                  <Badge variant="outline">Start {formatDuration(trimWindow[0])}</Badge>
-                  <Badge variant="outline">End {formatDuration(trimWindow[1])}</Badge>
-                </>
-              ) : (
-                <>
-                  <Badge variant="outline">Source length {formatDuration(duration)}</Badge>
-                </>
-              )}
-            </div>
           </div>
         </label>
       </CardHeader>
@@ -653,7 +636,7 @@ export function StudioTimeline({
               </select>
             {activeTimeFormat === "frames" ? (
               <p className="text-xs text-muted-foreground">
-                Frame numbers are calculated using the source video frame rate: {frameRate} fps.
+                Frame numbers are calculated using the source video frame rate: {formatFrameRate(frameRate)}.
               </p>
             ) : null}
             </div>

@@ -1,12 +1,33 @@
-import { DownloadIcon, LoaderCircleIcon, WandSparklesIcon } from "lucide-react"
+import { useState } from "react"
+import { ChevronDownIcon, DownloadIcon, LoaderCircleIcon, WandSparklesIcon } from "lucide-react"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput,
+  InputGroupText,
+} from "@/components/ui/input-group"
 import { Progress } from "@/components/ui/progress"
-import { formatBytes, formatDuration } from "@/lib/studio-utils"
-import type { GeneratedGif } from "@/state/studio-store"
+import { cn } from "@/lib/utils"
+import {
+  GIF_CUSTOM_COLOR_MAX,
+  GIF_CUSTOM_COLOR_MIN,
+  clampNumber,
+  convertGifCustomSizeValue,
+  estimateGifSizeBytes,
+  formatBytes,
+  formatDuration,
+  gifColorPresetOptions,
+  getGifColorPresetConfig,
+  getMaxGifFrameRate,
+  getGifOutputWidth,
+  getScaledHeight,
+} from "@/lib/studio-utils"
+import type { GeneratedGif, GifSettings, SourceVideo } from "@/state/studio-store"
 
 interface ExportPanelProps {
   canGenerate: boolean
@@ -14,16 +35,11 @@ interface ExportPanelProps {
   output: GeneratedGif | null
   phase: "idle" | "loading" | "saving" | "done" | "error"
   progress: number
+  settings: GifSettings
   selectionDuration: number
+  source: SourceVideo | null
+  onSettingsChange: (settings: Partial<GifSettings>) => void
   onGenerate: () => void
-}
-
-const phaseLabels: Record<ExportPanelProps["phase"], string> = {
-  idle: "Ready",
-  loading: "Generating",
-  saving: "Saving",
-  done: "Done",
-  error: "Needs attention",
 }
 
 export function ExportPanel({
@@ -32,27 +48,321 @@ export function ExportPanel({
   output,
   phase,
   progress,
+  settings,
   selectionDuration,
+  source,
+  onSettingsChange,
   onGenerate,
 }: ExportPanelProps) {
   const isBusy = phase === "loading" || phase === "saving"
+  const [isAdvancedOpen, setIsAdvancedOpen] = useState(false)
+  const maxGifFps = source ? getMaxGifFrameRate(source.frameRate) : 24
+  const activeColorPreset = gifColorPresetOptions.find((option) => option.value === settings.colorPreset)
+  const activeColorConfig = getGifColorPresetConfig(settings.colorPreset, settings.customColorCount)
+  const outputWidth = source
+    ? getGifOutputWidth(source.width, settings.sizeMode, settings.sizeUnit, settings.width)
+    : 0
+  const outputHeight = source ? getScaledHeight(source.width, source.height, outputWidth) : 0
+  const estimatedSizeBytes =
+    source && outputWidth > 0 && outputHeight > 0
+      ? estimateGifSizeBytes({
+          width: outputWidth,
+          height: outputHeight,
+          duration: selectionDuration,
+          fps: settings.fps,
+          sourceFrameRate: source.frameRate,
+          colorPreset: settings.colorPreset,
+          customColorCount: settings.customColorCount,
+          loopMode: settings.loopMode,
+          loopCount: settings.loopCount,
+          sizeMode: settings.sizeMode,
+          sizeUnit: settings.sizeUnit,
+        })
+      : 0
 
   return (
     <Card className="border-border/70 bg-card/85 shadow-2xl shadow-black/10 backdrop-blur">
       <CardHeader>
-        <CardTitle>Generate GIF</CardTitle>
-        <CardDescription>
-          Export the selected range to a locally generated GIF and keep the result in OPFS.
-        </CardDescription>
+        <CardTitle>Generate</CardTitle>
       </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant={phase === "done" ? "secondary" : "outline"}>{phaseLabels[phase]}</Badge>
-          <Badge variant="outline">{formatDuration(selectionDuration)} clip</Badge>
+      <CardContent className="space-y-5">
+        <FieldGroup>
+          <Field>
+            <FieldLabel>Size</FieldLabel>
+            <div className="space-y-3">
+              <div className="inline-flex w-fit rounded-lg border border-border/70 bg-background/60 p-1">
+                <Button
+                  size="sm"
+                  type="button"
+                  variant={settings.sizeMode === "original" ? "secondary" : "ghost"}
+                  disabled={!source}
+                  onClick={() => onSettingsChange({ sizeMode: "original" })}
+                >
+                  Original
+                </Button>
+                <Button
+                  size="sm"
+                  type="button"
+                  variant={settings.sizeMode === "custom" ? "secondary" : "ghost"}
+                  disabled={!source}
+                  onClick={() => onSettingsChange({ sizeMode: "custom" })}
+                >
+                  Custom
+                </Button>
+              </div>
+
+              {settings.sizeMode === "custom" ? (
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <InputGroup className="min-w-0 flex-1">
+                      <InputGroupInput
+                        id="gif-width"
+                        disabled={!source}
+                        inputMode="numeric"
+                        min={1}
+                        step={1}
+                        type="number"
+                        value={settings.width}
+                        onChange={(event) => {
+                          const value = Number(event.target.value)
+                          if (!Number.isFinite(value)) {
+                            return
+                          }
+
+                          onSettingsChange({
+                            width: Math.max(1, Math.round(value)),
+                          })
+                        }}
+                      />
+                    </InputGroup>
+
+                    <div className="inline-flex h-9 w-fit items-center rounded-lg border border-border/70 bg-background/60 p-1">
+                      <Button
+                        size="sm"
+                        type="button"
+                        variant={settings.sizeUnit === "pixels" ? "secondary" : "ghost"}
+                        disabled={!source}
+                        onClick={() =>
+                          onSettingsChange({
+                            sizeUnit: "pixels",
+                            width: source
+                              ? convertGifCustomSizeValue(
+                                  source.width,
+                                  settings.width,
+                                  settings.sizeUnit,
+                                  "pixels"
+                                )
+                              : settings.width,
+                          })
+                        }
+                      >
+                        px
+                      </Button>
+                      <Button
+                        size="sm"
+                        type="button"
+                        variant={settings.sizeUnit === "percent" ? "secondary" : "ghost"}
+                        disabled={!source}
+                        onClick={() =>
+                          onSettingsChange({
+                            sizeUnit: "percent",
+                            width: source
+                              ? convertGifCustomSizeValue(
+                                  source.width,
+                                  settings.width,
+                                  settings.sizeUnit,
+                                  "percent"
+                                )
+                              : settings.width,
+                          })
+                        }
+                      >
+                        %
+                      </Button>
+                    </div>
+                  </div>
+
+                  <FieldDescription>
+                    Choose the output frame width for the generated GIF.
+                  </FieldDescription>
+                </div>
+              ) : null}
+            </div>
+          </Field>
+        </FieldGroup>
+
+        <div className="rounded-xl border border-border/60 bg-muted/15">
+          <button
+            aria-expanded={isAdvancedOpen}
+            className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm font-medium text-foreground transition-colors hover:bg-muted/30"
+            type="button"
+            onClick={() => setIsAdvancedOpen((value) => !value)}
+          >
+            <span>Advanced options</span>
+            <ChevronDownIcon
+              className={cn(
+                "size-4 shrink-0 text-muted-foreground transition-transform",
+                isAdvancedOpen ? "rotate-0" : "-rotate-90"
+              )}
+            />
+          </button>
+
+          {isAdvancedOpen ? (
+            <div className="border-t border-border/60 px-3 py-4">
+              <FieldGroup>
+                <Field>
+                  <FieldLabel htmlFor="gif-fps">Frame rate</FieldLabel>
+                  <InputGroup>
+                    <InputGroupInput
+                      id="gif-fps"
+                      disabled={!source}
+                      inputMode="numeric"
+                      max={maxGifFps}
+                      min={1}
+                      type="number"
+                      value={settings.fps}
+                      onChange={(event) => {
+                        const value = Number(event.target.value)
+                        if (!Number.isFinite(value)) {
+                          return
+                        }
+
+                        onSettingsChange({
+                          fps: clampNumber(Math.round(value), 1, maxGifFps),
+                        })
+                      }}
+                    />
+                    <InputGroupAddon align="inline-end">
+                      <InputGroupText>fps</InputGroupText>
+                    </InputGroupAddon>
+                  </InputGroup>
+                  <FieldDescription>Max {maxGifFps} fps from source</FieldDescription>
+                </Field>
+
+                <Field>
+                  <FieldLabel>Color profile</FieldLabel>
+                  <div className="space-y-3">
+                    <div className="inline-flex w-fit flex-wrap rounded-lg border border-border/70 bg-background/60 p-1">
+                      {gifColorPresetOptions.map((option) => (
+                        <Button
+                          key={option.value}
+                          size="sm"
+                          type="button"
+                          variant={settings.colorPreset === option.value ? "secondary" : "ghost"}
+                          disabled={!source}
+                          onClick={() => onSettingsChange({ colorPreset: option.value })}
+                        >
+                          {option.label}
+                        </Button>
+                      ))}
+                    </div>
+                    {settings.colorPreset === "custom" ? (
+                      <InputGroup>
+                        <InputGroupInput
+                          disabled={!source}
+                          id="gif-custom-colors"
+                          inputMode="numeric"
+                          max={GIF_CUSTOM_COLOR_MAX}
+                          min={GIF_CUSTOM_COLOR_MIN}
+                          step={1}
+                          type="number"
+                          value={settings.customColorCount}
+                          onChange={(event) => {
+                            const value = Number(event.target.value)
+                            if (!Number.isFinite(value)) {
+                              return
+                            }
+
+                            onSettingsChange({
+                              customColorCount: clampNumber(
+                                Math.round(value),
+                                GIF_CUSTOM_COLOR_MIN,
+                                GIF_CUSTOM_COLOR_MAX
+                              ),
+                            })
+                          }}
+                        />
+                        <InputGroupAddon align="inline-end">
+                          <InputGroupText>colors</InputGroupText>
+                        </InputGroupAddon>
+                      </InputGroup>
+                    ) : null}
+                    {activeColorPreset?.description ? <FieldDescription>
+                      {activeColorPreset?.description} ({activeColorConfig.maxColors} colors)
+                    </FieldDescription> : null}
+                  </div>
+                </Field>
+
+                <Field>
+                  <FieldLabel>Looping</FieldLabel>
+                  <div className="space-y-3">
+                    <div className="inline-flex w-fit rounded-lg border border-border/70 bg-background/60 p-1">
+                      <Button
+                        size="sm"
+                        type="button"
+                        variant={settings.loopMode === "infinite" ? "secondary" : "ghost"}
+                        disabled={!source}
+                        onClick={() => onSettingsChange({ loopMode: "infinite" })}
+                      >
+                        Infinite
+                      </Button>
+                      <Button
+                        size="sm"
+                        type="button"
+                        variant={settings.loopMode === "count" ? "secondary" : "ghost"}
+                        disabled={!source}
+                        onClick={() => onSettingsChange({ loopMode: "count" })}
+                      >
+                        Specific count
+                      </Button>
+                    </div>
+
+                    {settings.loopMode === "count" ? (
+                      <InputGroup>
+                        <InputGroupInput
+                          disabled={!source}
+                          id="gif-loop-count"
+                          inputMode="numeric"
+                          min={1}
+                          step={1}
+                          type="number"
+                          value={settings.loopCount}
+                          onChange={(event) => {
+                            const value = Number(event.target.value)
+                            if (!Number.isFinite(value)) {
+                              return
+                            }
+
+                            onSettingsChange({
+                              loopCount: Math.max(1, Math.round(value)),
+                            })
+                          }}
+                        />
+                        <InputGroupAddon align="inline-end">
+                          <InputGroupText>loops</InputGroupText>
+                        </InputGroupAddon>
+                      </InputGroup>
+                    ) : null}
+                  </div>
+                </Field>
+              </FieldGroup>
+            </div>
+          ) : null}
         </div>
 
+        {source ? (
+          <p className="text-xs text-muted-foreground">
+            Output: {outputWidth}×{outputHeight} • {formatDuration(selectionDuration)} • Est.{" "}
+            {formatBytes(estimatedSizeBytes)}
+          </p>
+        ) : null}
+
         <Button className="w-full" disabled={!canGenerate || isBusy} onClick={onGenerate}>
-          {isBusy ? <LoaderCircleIcon className="animate-spin" data-icon="inline-start" /> : <WandSparklesIcon data-icon="inline-start" />}
+          {isBusy ? (
+            <LoaderCircleIcon className="animate-spin" data-icon="inline-start" />
+          ) : (
+            <WandSparklesIcon data-icon="inline-start" />
+          )}
           {isBusy ? "Generating..." : "Generate GIF"}
         </Button>
 

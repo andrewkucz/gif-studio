@@ -1,4 +1,4 @@
-import type { GifColorPreset, GifSettings } from "@/state/studio-store"
+import type { GifColorPreset, GifSettings, GifSizeMode, GifSizeUnit } from "@/state/studio-store"
 
 export const MIN_TRIM_DURATION = 0.1
 export type TimeDisplayFormat = "formatted" | "seconds" | "milliseconds" | "frames"
@@ -307,8 +307,11 @@ export function formatFrameRate(frameRate: number) {
 export interface GifColorPresetOption {
   value: GifColorPreset
   label: string
-  description: string
+  description?: string
 }
+
+export const GIF_CUSTOM_COLOR_MIN = 2
+export const GIF_CUSTOM_COLOR_MAX = 256
 
 interface GifColorPresetConfig {
   maxColors: number
@@ -316,25 +319,46 @@ interface GifColorPresetConfig {
   paletteDither: "sierra2_4a" | "bayer"
 }
 
+interface GifSizeEstimateOptions {
+  width: number
+  height: number
+  duration: number
+  fps: number
+  sourceFrameRate?: number
+  colorPreset: GifColorPreset
+  customColorCount?: number
+  loopMode: "infinite" | "count"
+  loopCount: number
+  sizeMode: GifSizeMode
+  sizeUnit: GifSizeUnit
+}
+
 export const gifColorPresetOptions: GifColorPresetOption[] = [
   {
     value: "original",
     label: "Original",
-    description: "Best color preservation and smoothest gradients. Largest files.",
+    description: "Best color fidelity.",
   },
   {
     value: "balanced",
     label: "Balanced",
-    description: "A middle ground between color fidelity and file size.",
+    description: "Balanced quality.",
   },
   {
     value: "compact",
     label: "Compact",
-    description: "Smaller files with a more limited palette.",
+    description: "Smaller files.",
+  },
+  {
+    value: "custom",
+    label: "Custom",
   },
 ]
 
-export function getGifColorPresetConfig(colorPreset: GifColorPreset): GifColorPresetConfig {
+export function getGifColorPresetConfig(
+  colorPreset: GifColorPreset,
+  customColorCount = 128
+): GifColorPresetConfig {
   switch (colorPreset) {
     case "balanced":
       return {
@@ -348,6 +372,16 @@ export function getGifColorPresetConfig(colorPreset: GifColorPreset): GifColorPr
         paletteStatsMode: "diff",
         paletteDither: "bayer",
       }
+    case "custom":
+      return {
+        maxColors: clampNumber(
+          Math.round(customColorCount),
+          GIF_CUSTOM_COLOR_MIN,
+          GIF_CUSTOM_COLOR_MAX
+        ),
+        paletteStatsMode: "full",
+        paletteDither: "sierra2_4a",
+      }
     case "original":
     default:
       return {
@@ -358,6 +392,125 @@ export function getGifColorPresetConfig(colorPreset: GifColorPreset): GifColorPr
   }
 }
 
+export function getGifOutputWidth(
+  sourceWidth: number,
+  sizeMode: GifSizeMode,
+  sizeUnit: GifSizeUnit,
+  customWidth: number
+) {
+  if (!Number.isFinite(sourceWidth) || sourceWidth <= 0) {
+    return Math.max(1, Math.round(customWidth))
+  }
+
+  if (sizeMode === "original") {
+    return Math.round(sourceWidth)
+  }
+
+  if (sizeUnit === "percent") {
+    return Math.max(1, Math.round((sourceWidth * customWidth) / 100))
+  }
+
+  return Math.max(1, Math.round(customWidth))
+}
+
+export function convertGifCustomSizeValue(
+  sourceWidth: number,
+  value: number,
+  fromUnit: GifSizeUnit,
+  toUnit: GifSizeUnit
+) {
+  const normalizedValue = Math.max(1, value)
+
+  if (
+    fromUnit === toUnit ||
+    !Number.isFinite(sourceWidth) ||
+    sourceWidth <= 0
+  ) {
+    return Math.round(normalizedValue)
+  }
+
+  if (fromUnit === "pixels" && toUnit === "percent") {
+    return Math.max(1, Math.round((normalizedValue / sourceWidth) * 100))
+  }
+
+  return Math.max(1, Math.round((normalizedValue / 100) * sourceWidth))
+}
+
+export function getScaledHeight(sourceWidth: number, sourceHeight: number, targetWidth: number) {
+  if (
+    !Number.isFinite(sourceWidth) ||
+    sourceWidth <= 0 ||
+    !Number.isFinite(sourceHeight) ||
+    sourceHeight <= 0 ||
+    !Number.isFinite(targetWidth) ||
+    targetWidth <= 0
+  ) {
+    return 0
+  }
+
+  return Math.max(1, Math.round((targetWidth * sourceHeight) / sourceWidth))
+}
+
+export function estimateGifSizeBytes({
+  width,
+  height,
+  duration,
+  fps,
+  sourceFrameRate = fps,
+  colorPreset,
+  customColorCount = 128,
+  loopMode,
+  loopCount,
+  sizeMode,
+  sizeUnit,
+}: GifSizeEstimateOptions) {
+  if (
+    !Number.isFinite(width) ||
+    width <= 0 ||
+    !Number.isFinite(height) ||
+    height <= 0 ||
+    !Number.isFinite(duration) ||
+    duration <= 0 ||
+    !Number.isFinite(fps) ||
+    fps <= 0
+  ) {
+    return 0
+  }
+
+  const frameCount = Math.max(1, Math.round(duration * fps))
+  const pixelCountPerFrame = width * height
+  const colorConfig = getGifColorPresetConfig(colorPreset, customColorCount)
+  const colorFactor = 0.95 + colorConfig.maxColors / 320
+  const ditherFactor = colorConfig.paletteDither === "sierra2_4a" ? 1.22 : 1.08
+  const statsFactor = colorConfig.paletteStatsMode === "full" ? 1.18 : 1.06
+  const motionFactor = 1.05 + Math.min(fps, 30) / 18
+  const sourceMotionFactor =
+    Number.isFinite(sourceFrameRate) && sourceFrameRate > 0
+      ? 1 + Math.min(sourceFrameRate, 60) / 120
+      : 1
+  const sizeModeFactor = sizeMode === "custom" ? 1.08 : 1.02
+  const sizeUnitFactor = sizeUnit === "percent" ? 1.06 : 1.03
+  const loopMetadataFactor = loopMode === "infinite" ? 1.03 : 1 + Math.min(loopCount, 25) / 500
+  const compressionRatio =
+    0.14 *
+    colorFactor *
+    ditherFactor *
+    statsFactor *
+    motionFactor *
+    sourceMotionFactor *
+    sizeModeFactor *
+    sizeUnitFactor *
+    loopMetadataFactor
+  const framePayloadBytes = pixelCountPerFrame * frameCount * compressionRatio
+  const paletteOverheadBytes = frameCount * colorConfig.maxColors * 3 * 0.7
+  const containerOverheadBytes = 8192 + frameCount * 96 + colorConfig.maxColors * 24
+
+  return Math.max(
+    24 * 1024,
+    Math.round(framePayloadBytes + paletteOverheadBytes + containerOverheadBytes)
+  )
+}
+
 export function buildDefaultSettings(
   fileName: string,
   sourceWidth: number,
@@ -365,9 +518,12 @@ export function buildDefaultSettings(
 ): GifSettings {
   return {
     fileName: createOutputFileName(fileName),
+    sizeMode: "original",
+    sizeUnit: "pixels",
     width: clampNumber(Math.round(Math.min(sourceWidth, 480)), 160, Math.max(sourceWidth, 160)),
-    fps: Math.min(12, getMaxGifFrameRate(sourceFrameRate)),
-    colorPreset: "original",
+    fps: Math.min(10, getMaxGifFrameRate(sourceFrameRate)),
+    colorPreset: "balanced",
+    customColorCount: 128,
     loopMode: "infinite",
     loopCount: 1,
   }

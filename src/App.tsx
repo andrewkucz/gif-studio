@@ -1,15 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import {
-  CogIcon,
-  HardDriveDownloadIcon,
+  InfoIcon,
   PlayCircleIcon,
   ScissorsIcon,
-  WandSparklesIcon,
 } from "lucide-react"
+import packageJson from "../package.json"
 
 import { ExportPanel } from "@/features/export/components/export-panel"
 import { VideoPlayer } from "@/features/player/components/video-player"
-import { GifSettingsForm } from "@/features/settings/components/gif-settings-form"
 import { StudioTimeline } from "@/features/timeline/components/timeline"
 import { UploadDropzone } from "@/features/upload/components/upload-dropzone"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -24,7 +22,6 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
-import { Separator } from "@/components/ui/separator"
 import { ffmpegClient } from "@/lib/ffmpeg/ffmpeg-client"
 import { createTimelineThumbnails } from "@/lib/media/thumbnail-service"
 import { probePlayableVideo } from "@/lib/media/video-metadata"
@@ -34,10 +31,10 @@ import {
   clampNumber,
   createOutputFileName,
   formatBytes,
-  formatDuration,
   getFileTypeLabel,
   getGifColorPresetConfig,
   getMaxGifFrameRate,
+  getGifOutputWidth,
   getTrimDuration,
   getFileExtension,
 } from "@/lib/studio-utils"
@@ -151,20 +148,16 @@ function App() {
 
     let isCancelled = false
 
-      const loadThumbnails = async () => {
-        if (!source.previewUrl || !source.isPreviewSupported) {
-          setThumbnails([])
-          setThumbnailState(false)
-          return
-        }
-
-        setThumbnailState(true)
-        try {
-          const sourceFile = await opfsRepository.readFile(source.opfsPath)
+    const loadThumbnails = async () => {
+      setThumbnailState(true)
+      try {
+        const sourceFile = await opfsRepository.readFile(source.opfsPath)
         const nextThumbnails = await createTimelineThumbnails({
           assetId: source.id,
           sourceFile,
-          sourceUrl: source.previewUrl,
+          sourceHeight: source.height,
+          sourceUrl: source.isPreviewSupported ? source.previewUrl : null,
+          sourceWidth: source.width,
           duration: source.duration,
           count: 10,
         })
@@ -363,14 +356,23 @@ function App() {
       const sourceFile = await opfsRepository.readFile(source.opfsPath)
       const outputName = createOutputFileName(settings.fileName)
       const cappedFps = clampNumber(settings.fps, 1, getMaxGifFrameRate(source.frameRate))
-      const colorPresetConfig = getGifColorPresetConfig(settings.colorPreset)
+      const outputWidth = getGifOutputWidth(
+        source.width,
+        settings.sizeMode,
+        settings.sizeUnit,
+        settings.width
+      )
+      const colorPresetConfig = getGifColorPresetConfig(
+        settings.colorPreset,
+        settings.customColorCount
+      )
 
       const blob = await ffmpegClient.generateGif({
         sourceFile,
         outputName,
         startTime: activeTrimWindow[0],
         endTime: activeTrimWindow[1],
-        width: settings.width,
+        width: outputWidth,
         fps: cappedFps,
         paletteDither: colorPresetConfig.paletteDither,
         paletteMaxColors: colorPresetConfig.maxColors,
@@ -392,8 +394,8 @@ function App() {
         `${source.id}-${outputName}`,
         blob
       )
-      const storedOutput = await opfsRepository.readFile(storedPath)
-      const nextOutputUrl = URL.createObjectURL(storedOutput)
+      const namedOutputFile = new File([blob], outputName, { type: "image/gif" })
+      const nextOutputUrl = URL.createObjectURL(namedOutputFile)
 
       const previousOutput = useStudioStore.getState().output
       if (previousOutput) {
@@ -403,7 +405,7 @@ function App() {
       setOutput({
         fileName: outputName,
         opfsPath: storedPath,
-        size: blob.size,
+        size: namedOutputFile.size,
         url: nextOutputUrl,
       })
       setExportState({ phase: "done", progress: 100 })
@@ -419,10 +421,13 @@ function App() {
     setExportState,
     setOutput,
     settings.colorPreset,
+    settings.customColorCount,
     settings.fileName,
     settings.fps,
     settings.loopCount,
     settings.loopMode,
+    settings.sizeMode,
+    settings.sizeUnit,
     settings.width,
     source,
     activeTrimWindow,
@@ -433,29 +438,6 @@ function App() {
       ? Math.round((storageEstimate.usage / storageEstimate.quota) * 100)
       : null
 
-  const controlsPanel = (
-    <>
-      <GifSettingsForm
-        duration={selectionDuration}
-        isTrimEnabled={isTrimEnabled}
-        settings={settings}
-        source={source}
-        trimWindow={activeTrimWindow}
-        onChange={setSettings}
-      />
-
-      <ExportPanel
-        canGenerate={canGenerate}
-        errorMessage={errorMessage}
-        output={output}
-        phase={exportPhase}
-        progress={exportProgress}
-        selectionDuration={selectionDuration}
-        onGenerate={handleGenerate}
-      />
-    </>
-  )
-
   return (
     <div className="relative min-h-screen overflow-hidden bg-background">
       <div className="absolute inset-x-0 top-0 h-80 bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.18),transparent_55%)]" />
@@ -464,17 +446,44 @@ function App() {
         <div className="absolute right-4 top-6 z-10 md:right-6 lg:right-8">
           <Dialog>
             <DialogTrigger asChild>
-              <Button aria-label="Open studio settings" size="icon" variant="outline">
-                <CogIcon />
+              <Button aria-label="Open about dialog" size="icon" variant="outline">
+                <InfoIcon />
               </Button>
             </DialogTrigger>
             <DialogContent className="sm:max-w-md">
               <DialogHeader>
-                <DialogTitle>Studio settings</DialogTitle>
+                <DialogTitle>About GIF Studio</DialogTitle>
                 <DialogDescription>
-                  Local storage and runtime details for this browser-based studio.
+                  Browser-local processing, storage, and runtime details for this app.
                 </DialogDescription>
               </DialogHeader>
+
+              <Card size="sm" className="shadow-none">
+                <CardHeader>
+                  <CardTitle>Project info</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="flex items-center justify-between rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-sm">
+                    <span className="text-muted-foreground">Author</span>
+                    <span className="font-medium text-foreground">Andrew Kuczynski</span>
+                  </div>
+                  <div className="flex items-center justify-between rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-sm">
+                    <span className="text-muted-foreground">GitHub</span>
+                    <a
+                      className="font-medium text-foreground underline decoration-border underline-offset-4 transition-colors hover:text-primary"
+                      href="https://github.com/andrewkucz/gif-studio"
+                      rel="noreferrer"
+                      target="_blank"
+                    >
+                      github.com/andrewkucz/gif-studio
+                    </a>
+                  </div>
+                  <div className="flex items-center justify-between rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-sm">
+                    <span className="text-muted-foreground">Version</span>
+                    <span className="font-medium text-foreground">v{packageJson.version}</span>
+                  </div>
+                </CardContent>
+              </Card>
 
               <Card size="sm" className="shadow-none">
                 <CardHeader>
@@ -515,39 +524,14 @@ function App() {
         </div>
 
         <header className="flex flex-col gap-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge>
-              <HardDriveDownloadIcon data-icon="inline-start" />
-              Fully local
-            </Badge>
-            <Badge variant="secondary">
-              <WandSparklesIcon data-icon="inline-start" />
-              FFmpeg.wasm
-            </Badge>
-            <Badge variant="outline">
-              <PlayCircleIcon data-icon="inline-start" />
-              OPFS-backed
-            </Badge>
-          </div>
-
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-            <div className="space-y-2">
-              <h1 className="font-heading text-4xl font-semibold tracking-tight text-foreground md:text-5xl">
-                GIF Studio
-              </h1>
-              <p className="max-w-3xl text-sm text-muted-foreground md:text-base">
-                Upload a video, trim the exact window you want, preview timeline thumbnails,
-                and export a GIF without sending your file to a server.
-              </p>
-            </div>
-
-            {source ? (
-              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                <Badge variant="outline">{source.width}×{source.height}</Badge>
-                <Badge variant="outline">{formatDuration(source.duration)} source</Badge>
-                <Badge variant="outline">{formatBytes(source.size)}</Badge>
-              </div>
-            ) : null}
+          <div className="space-y-2">
+            <h1 className="font-heading text-4xl font-semibold tracking-tight text-foreground md:text-5xl">
+              GIF Studio
+            </h1>
+            <p className="max-w-3xl text-sm text-muted-foreground md:text-base">
+              Upload a video, trim the exact window you want, preview timeline thumbnails,
+              and export a GIF without sending your file to a server.
+            </p>
           </div>
         </header>
 
@@ -581,15 +565,24 @@ function App() {
         {source ? (
           <main className="grid gap-6 xl:grid-cols-[minmax(0,1.7fr)_24rem]">
             <aside className="flex min-w-0 flex-col gap-6 self-start xl:col-start-2 xl:row-start-1 xl:sticky xl:top-6">
-              {controlsPanel}
+              <ExportPanel
+                canGenerate={canGenerate}
+                errorMessage={errorMessage}
+                output={output}
+                phase={exportPhase}
+                progress={exportProgress}
+                settings={settings}
+                selectionDuration={selectionDuration}
+                source={source}
+                onGenerate={handleGenerate}
+                onSettingsChange={setSettings}
+              />
             </aside>
 
             <section className="flex min-w-0 flex-col gap-6 xl:col-start-1 xl:row-start-1">
               <VideoPlayer
                 currentTime={currentTime}
-                fileTypeLabel={source.fileTypeLabel}
-                isPreviewSupported={source.isPreviewSupported}
-                src={source.previewUrl}
+                source={source}
                 onTimeChange={setCurrentTime}
               />
 
@@ -621,24 +614,29 @@ function App() {
           </main>
         )}
 
-        {source ? (
-          <>
-            <Separator />
-            <footer className="flex flex-col gap-2 text-xs text-muted-foreground md:flex-row md:items-center md:justify-between">
-              <p>
-                Active clip: <span className="font-medium text-foreground">{source.name}</span>
-              </p>
-              <p>
-                {isTrimEnabled ? "Selected range: " : "Using full source: "}
-                <span className="font-medium text-foreground">
-                  {isTrimEnabled
-                    ? `${formatDuration(activeTrimWindow[0])} → ${formatDuration(activeTrimWindow[1])}`
-                    : formatDuration(selectionDuration)}
-                </span>
-              </p>
-            </footer>
-          </>
-        ) : null}
+        <footer className="mt-auto border-t border-border/60 pt-4 text-xs text-muted-foreground">
+          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <p>Runs fully in your browser using OPFS and FFmpeg.wasm.</p>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+              <a
+                className="font-medium text-foreground underline decoration-border underline-offset-4 transition-colors hover:text-primary"
+                href="https://github.com/ffmpegwasm/ffmpeg.wasm"
+                rel="noreferrer"
+                target="_blank"
+              >
+                FFmpeg.wasm
+              </a>
+              <a
+                className="font-medium text-foreground underline decoration-border underline-offset-4 transition-colors hover:text-primary"
+                href="https://github.com/andrewkucz/gif-studio"
+                rel="noreferrer"
+                target="_blank"
+              >
+                GitHub
+              </a>
+            </div>
+          </div>
+        </footer>
       </div>
     </div>
   )

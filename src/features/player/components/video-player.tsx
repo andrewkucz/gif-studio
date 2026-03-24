@@ -1,25 +1,31 @@
 import { useEffect, useRef } from "react"
 import { MonitorOffIcon } from "lucide-react"
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
+import { formatBytes, formatDuration, formatFrameRate } from "@/lib/studio-utils"
+import type { SourceVideo } from "@/state/studio-store"
 
 interface VideoPlayerProps {
-  fileTypeLabel: string
-  isPreviewSupported: boolean
-  src: string | null
   currentTime: number
+  source: SourceVideo
   onTimeChange: (value: number) => void
 }
 
-export function VideoPlayer({
-  fileTypeLabel,
-  isPreviewSupported,
-  src,
-  currentTime,
-  onTimeChange,
-}: VideoPlayerProps) {
+export function VideoPlayer({ currentTime, source, onTimeChange }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
+  const { fileTypeLabel, isPreviewSupported, name, src, duration, frameRate, width, height, size } = {
+    fileTypeLabel: source.fileTypeLabel,
+    isPreviewSupported: source.isPreviewSupported,
+    name: source.name,
+    src: source.previewUrl,
+    duration: source.duration,
+    frameRate: source.frameRate,
+    width: source.width,
+    height: source.height,
+    size: source.size,
+  }
 
   useEffect(() => {
     const video = videoRef.current
@@ -36,14 +42,26 @@ export function VideoPlayer({
   return (
     <Card className="border-border/70 bg-card/85 shadow-2xl shadow-black/10 backdrop-blur">
       <CardHeader>
-        <CardTitle>Video preview</CardTitle>
-        <CardDescription>
-          {isPreviewSupported
-            ? "Use the native playback controls or the timeline below to line up your GIF range."
-            : "This source can still be trimmed and exported with FFmpeg, but the browser cannot render a live preview for this format."}
-        </CardDescription>
+        <CardTitle>Video input</CardTitle>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-4">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground/80">
+              Source file
+            </p>
+            <p className="mt-1 break-all text-sm font-medium text-foreground">{name}</p>
+          </div>
+
+          <div className="flex flex-wrap self-end justify-end gap-2">
+            <Badge variant="outline">{width}×{height}</Badge>
+            <Badge variant="outline">{formatDuration(duration)} length</Badge>
+            <Badge variant="outline">{formatFrameRate(frameRate)}</Badge>
+            <Badge variant="outline">{formatBytes(size)}</Badge>
+            <Badge variant="outline">{fileTypeLabel}</Badge>
+          </div>
+        </div>
+
         <div className="overflow-hidden rounded-2xl border border-border/60 bg-black">
           {isPreviewSupported && src ? (
             <video
@@ -64,7 +82,8 @@ export function VideoPlayer({
                 <EmptyHeader>
                   <EmptyTitle className="text-white">Live preview unavailable</EmptyTitle>
                   <EmptyDescription className="text-white/70">
-                    Live preview is not currently supported for the {fileTypeLabel} file type.
+                    Live preview is not currently supported for the {fileTypeLabel} file type,
+                    but timeline thumbnails and export still work.
                   </EmptyDescription>
                 </EmptyHeader>
               </Empty>

@@ -1,3 +1,4 @@
+import { ffmpegClient } from "@/lib/ffmpeg/ffmpeg-client"
 import { opfsRepository } from "@/lib/opfs/opfs-repository"
 import { clampNumber, formatDuration } from "@/lib/studio-utils"
 
@@ -11,7 +12,9 @@ export interface TimelineThumbnail {
 interface CreateTimelineThumbnailsOptions {
   assetId: string
   sourceFile: File
-  sourceUrl: string
+  sourceHeight: number
+  sourceUrl: string | null
+  sourceWidth: number
   duration: number
   count?: number
 }
@@ -112,7 +115,9 @@ async function createThumbnailBlob(
 export async function createTimelineThumbnails({
   assetId,
   sourceFile,
+  sourceHeight,
   sourceUrl,
+  sourceWidth,
   duration,
   count = 10,
 }: CreateTimelineThumbnailsOptions) {
@@ -122,20 +127,22 @@ export async function createTimelineThumbnails({
     count === 1 ? 0 : (duration * index) / (count - 1)
   )
 
-  const video = document.createElement("video")
-  video.preload = "auto"
-  video.muted = true
-  video.playsInline = true
-  video.src = sourceUrl
-
-  await waitForVideoToLoad(video)
-
-  const canvas = document.createElement("canvas")
   const thumbnailWidth = 192
   const thumbnailHeight = Math.max(
     108,
-    Math.round((thumbnailWidth * Math.max(video.videoHeight, 1)) / Math.max(video.videoWidth, 1))
+    Math.round((thumbnailWidth * Math.max(sourceHeight, 1)) / Math.max(sourceWidth, 1))
   )
+  const canUseBrowserVideo = Boolean(sourceUrl)
+  const video = canUseBrowserVideo ? document.createElement("video") : null
+  const canvas = canUseBrowserVideo ? document.createElement("canvas") : null
+
+  if (video && sourceUrl) {
+    video.preload = "auto"
+    video.muted = true
+    video.playsInline = true
+    video.src = sourceUrl
+    await waitForVideoToLoad(video)
+  }
 
   const thumbnails: TimelineThumbnail[] = []
 
@@ -154,8 +161,17 @@ export async function createTimelineThumbnails({
       continue
     }
 
-    await seekVideo(video, time)
-    const blob = await createThumbnailBlob(video, canvas, thumbnailWidth, thumbnailHeight)
+    const blob =
+      video && canvas
+        ? await (async () => {
+            await seekVideo(video, time)
+            return createThumbnailBlob(video, canvas, thumbnailWidth, thumbnailHeight)
+          })()
+        : await ffmpegClient.extractThumbnail({
+            sourceFile,
+            time,
+            width: thumbnailWidth,
+          })
     const savedPath = await opfsRepository.writeFile("thumbs", fileName, blob)
     const storedFile = await opfsRepository.readFile(savedPath)
 
