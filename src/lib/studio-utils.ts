@@ -277,6 +277,11 @@ export function getFileExtension(name: string) {
   return parts.length > 1 ? parts.at(-1)?.toLowerCase() ?? "" : ""
 }
 
+export function getFileTypeLabel(name: string) {
+  const extension = getFileExtension(name)
+  return extension ? extension.toUpperCase() : "Unknown"
+}
+
 export function createOutputFileName(name: string) {
   const sanitized = sanitizeBaseName(name)
   return sanitized.endsWith(".gif") ? sanitized : `${sanitized}.gif`

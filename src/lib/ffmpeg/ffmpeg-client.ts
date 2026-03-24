@@ -1,11 +1,12 @@
 import { FFmpeg } from "@ffmpeg/ffmpeg"
 import { fetchFile } from "@ffmpeg/util"
+import type { VideoMetadata } from "@/lib/media/video-metadata"
 
 import classWorkerURL from "@ffmpeg/ffmpeg/worker?url"
 import coreURL from "@ffmpeg/core?url"
 import wasmURL from "@ffmpeg/core/wasm?url"
 
-import { clampNumber } from "@/lib/studio-utils"
+import { clampNumber, getFileExtension, getFileTypeLabel } from "@/lib/studio-utils"
 
 interface GenerateGifOptions {
   sourceFile: File
@@ -21,6 +22,12 @@ interface GenerateGifOptions {
   loopMode: "infinite" | "count"
   onProgress?: (progress: number) => void
 }
+
+const METADATA_DURATION_PATTERN = /Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/
+const METADATA_VIDEO_SIZE_PATTERN = /(\d{2,5})x(\d{2,5})/
+const METADATA_VIDEO_FPS_PATTERN = /(\d+(?:\.\d+)?)\s(?:fps|tbr)\b/
+const MAX_METADATA_LOG_MESSAGES = 80
+const DEFAULT_FRAME_RATE = 24
 
 class FFmpegClient {
   private ffmpeg: FFmpeg | null = null
@@ -133,6 +140,87 @@ class FFmpegClient {
             console.error("FFmpeg cleanup error", result.reason)
           }
         })
+      })
+    }
+  }
+
+  async readVideoMetadata(sourceFile: File): Promise<VideoMetadata> {
+    const ffmpeg = await this.getInstance()
+    const extension = getFileExtension(sourceFile.name)
+    const fileTypeLabel = getFileTypeLabel(sourceFile.name)
+    const inputName = `metadata-${crypto.randomUUID()}.${extension || "mp4"}`
+    const logMessages: string[] = []
+    const logHandler = ({ message }: { message: string }) => {
+      if (
+        logMessages.length < MAX_METADATA_LOG_MESSAGES &&
+        (message.includes("Duration:") || message.includes("Video:"))
+      ) {
+        logMessages.push(message)
+      }
+    }
+
+    ffmpeg.on("log", logHandler)
+
+    try {
+      await ffmpeg.writeFile(inputName, await fetchFile(sourceFile))
+      const exitCode = await ffmpeg.exec([
+        "-hide_banner",
+        "-i",
+        inputName,
+        "-frames:v",
+        "1",
+        "-f",
+        "null",
+        "-",
+      ])
+
+      if (exitCode !== 0) {
+        throw new Error(`FFmpeg could not inspect the ${fileTypeLabel} file type.`)
+      }
+
+      const combinedLog = logMessages.join("\n")
+      const durationMatch = combinedLog.match(METADATA_DURATION_PATTERN)
+      const videoLine = combinedLog
+        .split("\n")
+        .find((line) => line.includes("Video:") && METADATA_VIDEO_SIZE_PATTERN.test(line))
+      const sizeMatch = videoLine?.match(METADATA_VIDEO_SIZE_PATTERN)
+      const fpsMatch = videoLine?.match(METADATA_VIDEO_FPS_PATTERN)
+
+      if (!durationMatch || !sizeMatch) {
+        throw new Error(`Unable to determine metadata for the ${fileTypeLabel} file type.`)
+      }
+
+      const duration =
+        Number(durationMatch[1]) * 3600 +
+        Number(durationMatch[2]) * 60 +
+        Number(durationMatch[3])
+      const width = Number(sizeMatch[1])
+      const height = Number(sizeMatch[2])
+      const frameRate = fpsMatch ? Number(fpsMatch[1]) : DEFAULT_FRAME_RATE
+
+      if (
+        !Number.isFinite(duration) ||
+        duration <= 0 ||
+        !Number.isFinite(width) ||
+        width <= 0 ||
+        !Number.isFinite(height) ||
+        height <= 0
+      ) {
+        throw new Error(
+          `The ${fileTypeLabel} file metadata contains invalid dimensions or duration.`
+        )
+      }
+
+      return {
+        duration,
+        frameRate: Number.isFinite(frameRate) && frameRate > 0 ? frameRate : DEFAULT_FRAME_RATE,
+        width,
+        height,
+      }
+    } finally {
+      ffmpeg.off("log", logHandler)
+      await ffmpeg.deleteFile(inputName).catch((error) => {
+        console.error("FFmpeg cleanup error", error)
       })
     }
   }

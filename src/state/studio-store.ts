@@ -10,7 +10,9 @@ export interface SourceVideo {
   id: string
   name: string
   opfsPath: string
-  previewUrl: string
+  previewUrl: string | null
+  isPreviewSupported: boolean
+  fileTypeLabel: string
   duration: number
   frameRate: number
   width: number

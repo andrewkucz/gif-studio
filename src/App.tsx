@@ -35,6 +35,7 @@ import {
   createOutputFileName,
   formatBytes,
   formatDuration,
+  getFileTypeLabel,
   getGifColorPresetConfig,
   getMaxGifFrameRate,
   getTrimDuration,
@@ -131,7 +132,7 @@ function App() {
   useEffect(() => {
     return () => {
       const state = useStudioStore.getState()
-      if (state.source) {
+      if (state.source?.previewUrl) {
         URL.revokeObjectURL(state.source.previewUrl)
       }
       for (const thumbnail of state.thumbnails) {
@@ -150,10 +151,16 @@ function App() {
 
     let isCancelled = false
 
-    const loadThumbnails = async () => {
-      setThumbnailState(true)
-      try {
-        const sourceFile = await opfsRepository.readFile(source.opfsPath)
+      const loadThumbnails = async () => {
+        if (!source.previewUrl || !source.isPreviewSupported) {
+          setThumbnails([])
+          setThumbnailState(false)
+          return
+        }
+
+        setThumbnailState(true)
+        try {
+          const sourceFile = await opfsRepository.readFile(source.opfsPath)
         const nextThumbnails = await createTimelineThumbnails({
           assetId: source.id,
           sourceFile,
@@ -205,7 +212,7 @@ function App() {
         setImportStatusMessage("Checking browser preview support...")
 
         const currentState = useStudioStore.getState()
-        if (currentState.source) {
+        if (currentState.source?.previewUrl) {
           URL.revokeObjectURL(currentState.source.previewUrl)
         }
         currentState.thumbnails.forEach((thumbnail) => URL.revokeObjectURL(thumbnail.url))
@@ -218,15 +225,15 @@ function App() {
         const sourceFileName = `${assetId}.${extension || "mp4"}`
         const opfsPath = await opfsRepository.writeFile("sources", sourceFileName, file)
         const storedFile = await opfsRepository.readFile(opfsPath)
-        const metadata = await probePlayableVideo(storedFile)
+        let metadata = await probePlayableVideo(storedFile)
+        const isPreviewSupported = metadata !== null
 
         if (!metadata) {
-          throw new Error(
-            "This browser cannot play that video format directly. Import a video the browser video element supports, such as MP4, MOV, or WebM."
-          )
+          setImportStatusMessage("Reading video details with FFmpeg...")
+          metadata = await ffmpegClient.readVideoMetadata(storedFile)
         }
 
-        const previewUrl = URL.createObjectURL(storedFile)
+        const previewUrl = isPreviewSupported ? URL.createObjectURL(storedFile) : null
         const shouldEnableTrim = metadata.duration > 10
         const defaultTrimEnd = shouldEnableTrim
           ? 6
@@ -236,6 +243,8 @@ function App() {
           id: assetId,
           name: file.name,
           opfsPath,
+          fileTypeLabel: getFileTypeLabel(file.name),
+          isPreviewSupported,
           previewUrl,
           duration: metadata.duration,
           frameRate: metadata.frameRate,
@@ -578,6 +587,8 @@ function App() {
             <section className="flex min-w-0 flex-col gap-6 xl:col-start-1 xl:row-start-1">
               <VideoPlayer
                 currentTime={currentTime}
+                fileTypeLabel={source.fileTypeLabel}
+                isPreviewSupported={source.isPreviewSupported}
                 src={source.previewUrl}
                 onTimeChange={setCurrentTime}
               />

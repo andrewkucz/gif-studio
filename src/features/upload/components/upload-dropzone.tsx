@@ -21,7 +21,7 @@ export function UploadDropzone({ disabled = false, onSelect, onSelectUrl }: Uplo
     multiple: false,
     noClick: true,
     accept: {
-      "video/*": [".mp4", ".mov", ".webm"],
+      "video/*": [],
     },
     onDropAccepted: (files) => {
       const file = files[0]
@@ -58,8 +58,8 @@ export function UploadDropzone({ disabled = false, onSelect, onSelectUrl }: Uplo
               {isDragActive ? "Drop the video to start editing" : "Drag & drop a video"}
             </p>
             <p className="max-w-xl text-sm text-muted-foreground">
-              Large local files are supported. Import a video format your browser can play
-              directly, such as MP4, MOV, or WebM.
+              Large local files are supported. Browser-playable formats show a live preview
+              immediately, while other video formats can still be trimmed and exported.
             </p>
           </div>
           <Button onClick={open} disabled={disabled}>
