@@ -1,5 +1,6 @@
 import { FFmpeg } from "@ffmpeg/ffmpeg"
 import { fetchFile } from "@ffmpeg/util"
+import type { VideoMetadata } from "@/lib/media/video-metadata"
 
 import classWorkerURL from "@ffmpeg/ffmpeg/worker?url"
 import coreURL from "@ffmpeg/core?url"
@@ -133,6 +134,78 @@ class FFmpegClient {
             console.error("FFmpeg cleanup error", result.reason)
           }
         })
+      })
+    }
+  }
+
+  async readVideoMetadata(sourceFile: File): Promise<VideoMetadata> {
+    const ffmpeg = await this.getInstance()
+    const inputName = `metadata-${crypto.randomUUID()}.${sourceFile.name.split(".").at(-1) ?? "mp4"}`
+    const logMessages: string[] = []
+    const logHandler = ({ message }: { message: string }) => {
+      logMessages.push(message)
+    }
+
+    ffmpeg.on("log", logHandler)
+
+    try {
+      await ffmpeg.writeFile(inputName, await fetchFile(sourceFile))
+      const exitCode = await ffmpeg.exec([
+        "-hide_banner",
+        "-i",
+        inputName,
+        "-frames:v",
+        "1",
+        "-f",
+        "null",
+        "-",
+      ])
+
+      if (exitCode !== 0) {
+        throw new Error("FFmpeg could not inspect that video format.")
+      }
+
+      const combinedLog = logMessages.join("\n")
+      const durationMatch = combinedLog.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/)
+      const videoLine = combinedLog
+        .split("\n")
+        .find((line) => line.includes("Video:") && /\d{2,5}x\d{2,5}/.test(line))
+      const sizeMatch = videoLine?.match(/(\d{2,5})x(\d{2,5})/)
+      const fpsMatch = videoLine?.match(/(\d+(?:\.\d+)?)\s(?:fps|tbr)\b/)
+
+      if (!durationMatch || !sizeMatch) {
+        throw new Error("Unable to determine metadata for that video format.")
+      }
+
+      const duration =
+        Number(durationMatch[1]) * 3600 +
+        Number(durationMatch[2]) * 60 +
+        Number(durationMatch[3])
+      const width = Number(sizeMatch[1])
+      const height = Number(sizeMatch[2])
+      const frameRate = fpsMatch ? Number(fpsMatch[1]) : 24
+
+      if (
+        !Number.isFinite(duration) ||
+        duration <= 0 ||
+        !Number.isFinite(width) ||
+        width <= 0 ||
+        !Number.isFinite(height) ||
+        height <= 0
+      ) {
+        throw new Error("Unable to determine metadata for that video format.")
+      }
+
+      return {
+        duration,
+        frameRate: Number.isFinite(frameRate) && frameRate > 0 ? frameRate : 24,
+        width,
+        height,
+      }
+    } finally {
+      ffmpeg.off("log", logHandler)
+      await ffmpeg.deleteFile(inputName).catch((error) => {
+        console.error("FFmpeg cleanup error", error)
       })
     }
   }
