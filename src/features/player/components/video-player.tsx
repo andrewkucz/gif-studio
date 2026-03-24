@@ -64,7 +64,7 @@ export function VideoPlayer({
                 <EmptyHeader>
                   <EmptyTitle className="text-white">Live preview unavailable</EmptyTitle>
                   <EmptyDescription className="text-white/70">
-                    Live preview is not currently supported for {fileTypeLabel} file type.
+                    Live preview is not currently supported for the {fileTypeLabel} file type.
                   </EmptyDescription>
                 </EmptyHeader>
               </Empty>

@@ -6,7 +6,7 @@ import classWorkerURL from "@ffmpeg/ffmpeg/worker?url"
 import coreURL from "@ffmpeg/core?url"
 import wasmURL from "@ffmpeg/core/wasm?url"
 
-import { clampNumber } from "@/lib/studio-utils"
+import { clampNumber, getFileExtension, getFileTypeLabel } from "@/lib/studio-utils"
 
 interface GenerateGifOptions {
   sourceFile: File
@@ -22,6 +22,12 @@ interface GenerateGifOptions {
   loopMode: "infinite" | "count"
   onProgress?: (progress: number) => void
 }
+
+const METADATA_DURATION_PATTERN = /Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/
+const METADATA_VIDEO_SIZE_PATTERN = /(\d{2,5})x(\d{2,5})/
+const METADATA_VIDEO_FPS_PATTERN = /(\d+(?:\.\d+)?)\s(?:fps|tbr)\b/
+const MAX_METADATA_LOG_MESSAGES = 80
+const DEFAULT_FRAME_RATE = 24
 
 class FFmpegClient {
   private ffmpeg: FFmpeg | null = null
@@ -140,10 +146,17 @@ class FFmpegClient {
 
   async readVideoMetadata(sourceFile: File): Promise<VideoMetadata> {
     const ffmpeg = await this.getInstance()
-    const inputName = `metadata-${crypto.randomUUID()}.${sourceFile.name.split(".").at(-1) ?? "mp4"}`
+    const extension = getFileExtension(sourceFile.name)
+    const fileTypeLabel = getFileTypeLabel(sourceFile.name)
+    const inputName = `metadata-${crypto.randomUUID()}.${extension || "mp4"}`
     const logMessages: string[] = []
     const logHandler = ({ message }: { message: string }) => {
-      logMessages.push(message)
+      if (
+        logMessages.length < MAX_METADATA_LOG_MESSAGES &&
+        (message.includes("Duration:") || message.includes("Video:"))
+      ) {
+        logMessages.push(message)
+      }
     }
 
     ffmpeg.on("log", logHandler)
@@ -162,19 +175,19 @@ class FFmpegClient {
       ])
 
       if (exitCode !== 0) {
-        throw new Error("FFmpeg could not inspect that video format.")
+        throw new Error(`FFmpeg could not inspect the ${fileTypeLabel} file type.`)
       }
 
       const combinedLog = logMessages.join("\n")
-      const durationMatch = combinedLog.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/)
+      const durationMatch = combinedLog.match(METADATA_DURATION_PATTERN)
       const videoLine = combinedLog
         .split("\n")
-        .find((line) => line.includes("Video:") && /\d{2,5}x\d{2,5}/.test(line))
-      const sizeMatch = videoLine?.match(/(\d{2,5})x(\d{2,5})/)
-      const fpsMatch = videoLine?.match(/(\d+(?:\.\d+)?)\s(?:fps|tbr)\b/)
+        .find((line) => line.includes("Video:") && METADATA_VIDEO_SIZE_PATTERN.test(line))
+      const sizeMatch = videoLine?.match(METADATA_VIDEO_SIZE_PATTERN)
+      const fpsMatch = videoLine?.match(METADATA_VIDEO_FPS_PATTERN)
 
       if (!durationMatch || !sizeMatch) {
-        throw new Error("Unable to determine metadata for that video format.")
+        throw new Error(`Unable to determine metadata for the ${fileTypeLabel} file type.`)
       }
 
       const duration =
@@ -183,7 +196,7 @@ class FFmpegClient {
         Number(durationMatch[3])
       const width = Number(sizeMatch[1])
       const height = Number(sizeMatch[2])
-      const frameRate = fpsMatch ? Number(fpsMatch[1]) : 24
+      const frameRate = fpsMatch ? Number(fpsMatch[1]) : DEFAULT_FRAME_RATE
 
       if (
         !Number.isFinite(duration) ||
@@ -193,12 +206,14 @@ class FFmpegClient {
         !Number.isFinite(height) ||
         height <= 0
       ) {
-        throw new Error("Unable to determine metadata for that video format.")
+        throw new Error(
+          `The ${fileTypeLabel} file metadata contains invalid dimensions or duration.`
+        )
       }
 
       return {
         duration,
-        frameRate: Number.isFinite(frameRate) && frameRate > 0 ? frameRate : 24,
+        frameRate: Number.isFinite(frameRate) && frameRate > 0 ? frameRate : DEFAULT_FRAME_RATE,
         width,
         height,
       }
