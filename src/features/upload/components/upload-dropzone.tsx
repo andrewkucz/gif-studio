@@ -1,16 +1,20 @@
-import { FilmIcon, UploadIcon } from "lucide-react"
+import { useState } from "react"
+import { FilmIcon, LinkIcon, UploadIcon } from "lucide-react"
 import { useDropzone } from "react-dropzone"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 
 interface UploadDropzoneProps {
   disabled?: boolean
   onSelect: (file: File) => void
+  onSelectUrl: (url: string) => void
 }
 
-export function UploadDropzone({ disabled = false, onSelect }: UploadDropzoneProps) {
+export function UploadDropzone({ disabled = false, onSelect, onSelectUrl }: UploadDropzoneProps) {
+  const [remoteUrl, setRemoteUrl] = useState("")
   const { getInputProps, getRootProps, isDragActive, open } = useDropzone({
     disabled,
     maxFiles: 1,
@@ -32,11 +36,11 @@ export function UploadDropzone({ disabled = false, onSelect }: UploadDropzonePro
       <CardHeader>
         <CardTitle>Import a source video</CardTitle>
         <CardDescription>
-          Drop a video here or browse from disk. The source is cached locally so timeline
-          frames and exports stay on-device.
+          Drop a video here, browse from disk, or paste a direct video URL. The source is
+          cached locally so timeline frames and exports stay on-device.
         </CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-4">
         <div
           {...getRootProps()}
           className={cn(
@@ -63,6 +67,45 @@ export function UploadDropzone({ disabled = false, onSelect }: UploadDropzonePro
             {disabled ? "Importing..." : "Choose video"}
           </Button>
         </div>
+
+        <form
+          className="space-y-2"
+          onSubmit={(event) => {
+            event.preventDefault()
+            const value = remoteUrl.trim()
+            if (!value || disabled) {
+              return
+            }
+
+            onSelectUrl(value)
+          }}
+        >
+          <label className="text-sm font-medium text-foreground" htmlFor="remote-video-url">
+            Import from URL
+          </label>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Input
+              autoCapitalize="none"
+              autoCorrect="off"
+              className="flex-1"
+              disabled={disabled}
+              id="remote-video-url"
+              inputMode="url"
+              placeholder="https://example.com/video.mp4"
+              type="url"
+              value={remoteUrl}
+              onChange={(event) => setRemoteUrl(event.target.value)}
+            />
+            <Button disabled={disabled || remoteUrl.trim().length === 0} type="submit">
+              <LinkIcon data-icon="inline-start" />
+              Use URL
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            The URL must point directly to a video file and allow browser cross-origin
+            downloads (CORS), since this app runs entirely client-side.
+          </p>
+        </form>
       </CardContent>
     </Card>
   )

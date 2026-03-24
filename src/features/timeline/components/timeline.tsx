@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 
-import { LocateFixedIcon } from "lucide-react"
+import { ChevronDownIcon, LocateFixedIcon } from "lucide-react"
 import { useMaskInput } from "use-mask-input"
 
 import { Badge } from "@/components/ui/badge"
@@ -36,10 +36,12 @@ interface StudioTimelineProps {
   duration: number
   frameRate: number
   inputMode: RangeInputMode
+  isTrimEnabled: boolean
   isDurationLocked: boolean
   isLoading: boolean
   thumbnails: TimelineThumbnail[]
   trimWindow: [number, number]
+  onTrimEnabledChange: (value: boolean) => void
   onDurationLockChange: (value: boolean) => void
   onInputModeChange: (mode: RangeInputMode) => void
   onSeek: (time: number) => void
@@ -67,7 +69,7 @@ interface DragState {
 const timeFormatOptions: Array<{ label: string; value: TimeDisplayFormat }> = [
   { label: "Seconds", value: "seconds" },
   { label: "Milliseconds", value: "milliseconds" },
-  { label: "Frame number (GIF fps)", value: "frames" },
+  { label: "Frame number", value: "frames" },
 ]
 
 function getFormattedTimeLabel(totalDuration: number) {
@@ -126,6 +128,39 @@ function getTimeFormatPlaceholder(format: TimeDisplayFormat, totalDuration: numb
   }
 }
 
+function getTimeFormatInputStep(format: TimeDisplayFormat) {
+  switch (format) {
+    case "frames":
+      return 1
+    case "milliseconds":
+      return 100
+    case "seconds":
+      return 0.1
+    case "formatted":
+    default:
+      return undefined
+  }
+}
+
+function getKeyboardTrimStep(
+  format: TimeDisplayFormat,
+  totalDuration: number,
+  frameRate: number
+) {
+  switch (format) {
+    case "frames":
+      return Number.isFinite(frameRate) && frameRate > 0 ? 1 / frameRate : 0.1
+    case "milliseconds":
+      return 0.1
+    case "seconds":
+      return 0.1
+    case "formatted":
+      return getFormattedTimeShape(totalDuration) === "hh:mm:ss" ? 1 : 1
+    default:
+      return 0.1
+  }
+}
+
 function TimelineTimeField({
   value,
   format,
@@ -136,6 +171,8 @@ function TimelineTimeField({
 }: TimelineTimeFieldProps) {
   const [draft, setDraft] = useState(value)
   const suffix = getTimeFormatSuffix(format)
+  const inputStep = getTimeFormatInputStep(format)
+  const inputType = format === "formatted" ? "text" : "number"
   const maskRef = useMaskInput({
     mask: format === "formatted" ? getFormattedTimeMasks(totalDuration) : null,
   })
@@ -150,10 +187,12 @@ function TimelineTimeField({
         )}
         data-slot="input-group-control"
         id={id}
-        inputMode={format === "formatted" ? "text" : "numeric"}
+        inputMode={format === "formatted" ? "text" : format === "seconds" ? "decimal" : "numeric"}
+        min={format === "formatted" ? undefined : 0}
         placeholder={getTimeFormatPlaceholder(format, totalDuration)}
         ref={maskRef}
-        type="text"
+        step={inputStep}
+        type={inputType}
         value={draft}
         onBlur={() => {
           setDraft(onCommit(draft))
@@ -199,10 +238,12 @@ export function StudioTimeline({
   duration,
   frameRate,
   inputMode,
+  isTrimEnabled,
   isDurationLocked,
   isLoading,
   thumbnails,
   trimWindow,
+  onTrimEnabledChange,
   onDurationLockChange,
   onInputModeChange,
   onSeek,
@@ -214,6 +255,10 @@ export function StudioTimeline({
   const supportsFormattedTime = duration >= 60
   const activeTimeFormat =
     !supportsFormattedTime && timeFormat === "formatted" ? "seconds" : timeFormat
+  const keyboardTrimStep = useMemo(
+    () => getKeyboardTrimStep(activeTimeFormat, duration, frameRate),
+    [activeTimeFormat, duration, frameRate]
+  )
   const availableTimeFormats = useMemo(
     () =>
       supportsFormattedTime
@@ -271,7 +316,7 @@ export function StudioTimeline({
         duration
       )
       onTrimChange(nextWindow)
-      onSeek(nextWindow[0])
+      onSeek(nextWindow[1])
     }
 
     const clearDrag = () => {
@@ -343,185 +388,278 @@ export function StudioTimeline({
     })
   }
 
+  const nudgeTrimHandle =
+    (target: DragTarget) => (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (duration <= 0) {
+        return
+      }
+
+      if (target !== "window" && isDurationLocked) {
+        return
+      }
+
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+        return
+      }
+
+      event.preventDefault()
+
+      const nudgeAmount = event.shiftKey ? keyboardTrimStep * 10 : keyboardTrimStep
+      const delta = event.key === "ArrowRight" ? nudgeAmount : -nudgeAmount
+      const nextWindow =
+        target === "window"
+          ? shiftLockedTrimWindow(trimWindow, delta, duration)
+          : target === "start"
+          ? trimWindowFromStartAndEnd(trimWindow[0] + delta, trimWindow[1], duration)
+          : trimWindowFromStartAndEnd(trimWindow[0], trimWindow[1] + delta, duration)
+
+      onTrimChange(nextWindow)
+      onSeek(target === "end" ? nextWindow[1] : nextWindow[0])
+    }
+
   const applyCurrentTimeToStart = () =>
     commitStartValue(formatTimeInputValue(currentTime, activeTimeFormat, duration, frameRate))
   const applyCurrentTimeToSecondary = () =>
     commitSecondaryValue(formatTimeInputValue(currentTime, activeTimeFormat, duration, frameRate))
+  const headerDescription = isTrimEnabled
+    ? "Choose the exact window you want to export. Thumbnail previews are cached locally for the current source."
+    : "Export the full source video without trimming. Your previous trim selection stays saved in case you turn this back on."
 
   return (
     <Card className="border-border/70 bg-card/85 shadow-2xl shadow-black/10 backdrop-blur">
-      <CardHeader>
-        <CardTitle>Trim window</CardTitle>
-        <CardDescription>
-          Thumbnails are generated on demand and cached locally for the current source.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          <Badge variant="outline">Start {formatDuration(trimWindow[0])}</Badge>
-          <Badge variant="outline">End {formatDuration(trimWindow[1])}</Badge>
-          <Badge variant="secondary">Clip {formatDuration(selectionDuration)}</Badge>
-        </div>
-
-        <div className="space-y-4 rounded-xl border border-border/60 bg-muted/25 p-3">
-          <FrameStrip
-            currentTime={currentTime}
-            duration={duration}
-            isLoading={isLoading}
-            thumbnails={thumbnails}
-            onSeek={onSeek}
+      <CardHeader className="gap-2">
+        <label
+          className="flex cursor-pointer items-start gap-3 transition-colors"
+          htmlFor="trim-enabled"
+        >
+          <Checkbox
+            checked={isTrimEnabled}
+            className="mt-0.5 size-5 rounded-md"
+            id="trim-enabled"
+            onCheckedChange={(checked) => onTrimEnabledChange(checked === true)}
           />
-
-          <div className="space-y-3">
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>{formatDuration(selectionDuration)} selected</span>
-              <span>{formatDuration(duration)} total</span>
-            </div>
-
-            <div
-              ref={trackRef}
-              className="relative h-8 rounded-full bg-background/80 ring-1 ring-border/70"
-            >
-              <div
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-y-0 w-px bg-primary/80"
-                style={{ left: `calc(${currentPercent}% - 0.5px)` }}
-              />
-
-              <div
+          <div className="min-w-0 flex-1 space-y-2">
+            <div className="flex items-start justify-between gap-3">
+              <div className="space-y-1">
+                <CardTitle>Trim video</CardTitle>
+                <CardDescription>{headerDescription}</CardDescription>
+              </div>
+              <ChevronDownIcon
                 aria-hidden="true"
                 className={cn(
-                  "absolute top-1/2 h-4 -translate-y-1/2 rounded-full border border-primary/60 bg-primary/25",
-                  isDurationLocked && "cursor-grab active:cursor-grabbing"
+                  "mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform",
+                  isTrimEnabled ? "rotate-0" : "-rotate-90"
                 )}
-                style={{
-                  left: `${startPercent}%`,
-                  width: `${widthPercent}%`,
-                }}
-                onPointerDown={isDurationLocked ? beginDrag("window") : undefined}
-              />
-
-              <div
-                role="slider"
-                aria-label="Trim start"
-                aria-valuemin={0}
-                aria-valuemax={trimWindow[1]}
-                aria-valuenow={trimWindow[0]}
-                className={cn(
-                  "absolute top-1/2 size-5 -translate-y-1/2 rounded-full border border-primary/80 bg-background shadow-sm",
-                  isDurationLocked ? "cursor-not-allowed opacity-45" : "cursor-ew-resize"
-                )}
-                style={{ left: `calc(${startPercent}% - 10px)` }}
-                onPointerDown={beginDrag("start")}
-              />
-
-              <div
-                role="slider"
-                aria-label="Trim end"
-                aria-valuemin={trimWindow[0]}
-                aria-valuemax={duration}
-                aria-valuenow={trimWindow[1]}
-                className={cn(
-                  "absolute top-1/2 size-5 -translate-y-1/2 rounded-full border border-primary/80 bg-background shadow-sm",
-                  isDurationLocked ? "cursor-not-allowed opacity-45" : "cursor-ew-resize"
-                )}
-                style={{ left: `calc(${startPercent + widthPercent}% - 10px)` }}
-                onPointerDown={beginDrag("end")}
-              />
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <label className="flex items-center gap-2 text-sm text-foreground">
-              <Checkbox
-                checked={isDurationLocked}
-                id="lock-duration"
-                onCheckedChange={(checked) => onDurationLockChange(checked === true)}
-              />
-              <span>Lock duration</span>
-            </label>
-          </div>
-
-          <div className="grid gap-3 md:grid-cols-2">
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground" htmlFor="trim-start-input">
-                Start time
-              </label>
-              <TimelineTimeField
-                key={`start-${activeTimeFormat}-${startInputValue}`}
-                format={activeTimeFormat}
-                id="trim-start-input"
-                totalDuration={duration}
-                value={startInputValue}
-                onApplyCurrentTime={applyCurrentTimeToStart}
-                onCommit={commitStartValue}
               />
             </div>
 
-            <div className="space-y-1.5">
-              <label
-                className="text-xs font-medium text-muted-foreground"
-                htmlFor="trim-secondary-input"
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <Badge variant={isTrimEnabled ? "secondary" : "outline"}>
+                {isTrimEnabled
+                  ? `${formatDuration(selectionDuration)} selected`
+                  : `${formatDuration(duration)} full video`}
+              </Badge>
+              {isTrimEnabled ? (
+                <>
+                  <Badge variant="outline">Start {formatDuration(trimWindow[0])}</Badge>
+                  <Badge variant="outline">End {formatDuration(trimWindow[1])}</Badge>
+                </>
+              ) : (
+                <>
+                  <Badge variant="outline">Source length {formatDuration(duration)}</Badge>
+                </>
+              )}
+            </div>
+          </div>
+        </label>
+      </CardHeader>
+      {isTrimEnabled ? (
+        <CardContent className="space-y-4">
+          <div className="space-y-4 rounded-xl border border-border/60 bg-muted/25 p-3">
+            <FrameStrip
+              currentTime={currentTime}
+              duration={duration}
+              isLoading={isLoading}
+              thumbnails={thumbnails}
+              onSeek={onSeek}
+            />
+
+            <div className="space-y-3">
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>{formatDuration(selectionDuration)} selected</span>
+                <span>{formatDuration(duration)} total</span>
+              </div>
+
+              <div
+                ref={trackRef}
+                className="relative h-8 rounded-full bg-background/80 ring-1 ring-border/70"
               >
-                {inputMode === "start-length" ? "Duration" : "End time"}
-              </label>
-              <TimelineTimeField
-                key={`secondary-${inputMode}-${activeTimeFormat}-${secondaryInputValue}`}
-                format={activeTimeFormat}
-                id="trim-secondary-input"
-                totalDuration={duration}
-                value={secondaryInputValue}
-                onApplyCurrentTime={inputMode === "start-end" ? applyCurrentTimeToSecondary : undefined}
-                onCommit={commitSecondaryValue}
-              />
-              <div className="inline-flex w-fit rounded-lg border border-border/70 bg-background/60 p-1">
-                <Button
-                  size="sm"
-                  type="button"
-                  variant={inputMode === "start-end" ? "secondary" : "ghost"}
-                  onClick={() => onInputModeChange("start-end")}
-                >
-                  End time
-                </Button>
-                <Button
-                  size="sm"
-                  type="button"
-                  variant={inputMode === "start-length" ? "secondary" : "ghost"}
-                  onClick={() => onInputModeChange("start-length")}
-                >
-                  Duration
-                </Button>
+                <div
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-y-0 w-px bg-primary/80"
+                  style={{ left: `calc(${currentPercent}% - 0.5px)` }}
+                />
+
+                <div
+                  role="slider"
+                  aria-label="Trim window"
+                  aria-disabled={false}
+                  aria-valuemin={0}
+                  aria-valuemax={Math.max(duration - selectionDuration, 0)}
+                  aria-valuenow={trimWindow[0]}
+                  aria-valuetext={`${formatDuration(trimWindow[0])} to ${formatDuration(trimWindow[1])}`}
+                  tabIndex={0}
+                  className={cn(
+                    "absolute top-1/2 h-4 -translate-y-1/2 rounded-full border border-primary/60 bg-primary/25 outline-none transition-shadow",
+                    "focus-visible:border-primary focus-visible:ring-3 focus-visible:ring-primary/25 focus-visible:shadow-[0_0_0_2px_rgba(255,255,255,0.85),0_0_0_5px_rgba(59,130,246,0.22)]",
+                    "cursor-grab active:cursor-grabbing"
+                  )}
+                  style={{
+                    left: `${startPercent}%`,
+                    width: `${widthPercent}%`,
+                  }}
+                  onKeyDown={nudgeTrimHandle("window")}
+                  onPointerDown={beginDrag("window")}
+                />
+
+                <div
+                  role="slider"
+                  aria-label="Trim start"
+                  aria-disabled={isDurationLocked}
+                  aria-valuemin={0}
+                  aria-valuemax={trimWindow[1]}
+                  aria-valuenow={trimWindow[0]}
+                  tabIndex={isDurationLocked ? -1 : 0}
+                  className={cn(
+                    "absolute top-1/2 z-10 size-5 -translate-y-1/2 rounded-full border border-primary/80 bg-background shadow-sm outline-none transition-shadow",
+                    "focus-visible:border-primary focus-visible:ring-3 focus-visible:ring-primary/25 focus-visible:shadow-[0_0_0_2px_rgba(255,255,255,0.9),0_0_0_5px_rgba(59,130,246,0.24)]",
+                    isDurationLocked ? "cursor-not-allowed opacity-45" : "cursor-ew-resize"
+                  )}
+                  style={{ left: `calc(${startPercent}% - 10px)` }}
+                  onKeyDown={nudgeTrimHandle("start")}
+                  onPointerDown={beginDrag("start")}
+                />
+
+                <div
+                  role="slider"
+                  aria-label="Trim end"
+                  aria-disabled={isDurationLocked}
+                  aria-valuemin={trimWindow[0]}
+                  aria-valuemax={duration}
+                  aria-valuenow={trimWindow[1]}
+                  tabIndex={isDurationLocked ? -1 : 0}
+                  className={cn(
+                    "absolute top-1/2 z-10 size-5 -translate-y-1/2 rounded-full border border-primary/80 bg-background shadow-sm outline-none transition-shadow",
+                    "focus-visible:border-primary focus-visible:ring-3 focus-visible:ring-primary/25 focus-visible:shadow-[0_0_0_2px_rgba(255,255,255,0.9),0_0_0_5px_rgba(59,130,246,0.24)]",
+                    isDurationLocked ? "cursor-not-allowed opacity-45" : "cursor-ew-resize"
+                  )}
+                  style={{ left: `calc(${startPercent + widthPercent}% - 10px)` }}
+                  onKeyDown={nudgeTrimHandle("end")}
+                  onPointerDown={beginDrag("end")}
+                />
               </div>
             </div>
-          </div>
 
-          <div className="space-y-2">
-            <label className="text-xs font-medium text-muted-foreground" htmlFor="time-format-select">
-              Time format
-            </label>
-            <select
-              className={cn(
-                "h-8 w-full rounded-lg border border-input bg-background px-2.5 text-sm text-foreground outline-none",
-                "focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-              )}
-              id="time-format-select"
-              value={activeTimeFormat}
-              onChange={(event) => setTimeFormat(event.target.value as TimeDisplayFormat)}
-            >
-              {availableTimeFormats.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <label className="flex items-center gap-2 text-sm text-foreground">
+                <Checkbox
+                  checked={isDurationLocked}
+                  id="lock-duration"
+                  onCheckedChange={(checked) => onDurationLockChange(checked === true)}
+                />
+                <span>Lock duration</span>
+              </label>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="space-y-1.5">
+                <label
+                  className="text-xs font-medium text-muted-foreground"
+                  htmlFor="trim-start-input"
+                >
+                  Start time
+                </label>
+                <TimelineTimeField
+                  key={`start-${activeTimeFormat}-${startInputValue}`}
+                  format={activeTimeFormat}
+                  id="trim-start-input"
+                  totalDuration={duration}
+                  value={startInputValue}
+                  onApplyCurrentTime={applyCurrentTimeToStart}
+                  onCommit={commitStartValue}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label
+                  className="text-xs font-medium text-muted-foreground"
+                  htmlFor="trim-secondary-input"
+                >
+                  {inputMode === "start-length" ? "Duration" : "End time"}
+                </label>
+                <TimelineTimeField
+                  key={`secondary-${inputMode}-${activeTimeFormat}-${secondaryInputValue}`}
+                  format={activeTimeFormat}
+                  id="trim-secondary-input"
+                  totalDuration={duration}
+                  value={secondaryInputValue}
+                  onApplyCurrentTime={
+                    inputMode === "start-end" ? applyCurrentTimeToSecondary : undefined
+                  }
+                  onCommit={commitSecondaryValue}
+                />
+                <div className="inline-flex w-fit rounded-lg border border-border/70 bg-background/60 p-1">
+                  <Button
+                    size="sm"
+                    type="button"
+                    variant={inputMode === "start-end" ? "secondary" : "ghost"}
+                    onClick={() => onInputModeChange("start-end")}
+                  >
+                    End time
+                  </Button>
+                  <Button
+                    size="sm"
+                    type="button"
+                    variant={inputMode === "start-length" ? "secondary" : "ghost"}
+                    onClick={() => onInputModeChange("start-length")}
+                  >
+                    Duration
+                  </Button>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label
+                className="text-xs font-medium text-muted-foreground"
+                htmlFor="time-format-select"
+              >
+                Time format
+              </label>
+              <select
+                className={cn(
+                  "h-8 w-full rounded-lg border border-input bg-background px-2.5 text-sm text-foreground outline-none",
+                  "focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                )}
+                id="time-format-select"
+                value={activeTimeFormat}
+                onChange={(event) => setTimeFormat(event.target.value as TimeDisplayFormat)}
+              >
+                {availableTimeFormats.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
             {activeTimeFormat === "frames" ? (
               <p className="text-xs text-muted-foreground">
-                Frame numbers are calculated using the current GIF frame rate: {frameRate} fps.
+                Frame numbers are calculated using the source video frame rate: {frameRate} fps.
               </p>
             ) : null}
+            </div>
           </div>
-        </div>
-      </CardContent>
+        </CardContent>
+      ) : null}
     </Card>
   )
 }

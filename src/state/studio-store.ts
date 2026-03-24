@@ -3,6 +3,8 @@ import { create } from "zustand"
 import type { TimelineThumbnail } from "@/lib/media/thumbnail-service"
 
 export type RangeInputMode = "start-length" | "start-end"
+export type GifLoopMode = "infinite" | "count"
+export type GifColorPreset = "original" | "balanced" | "compact"
 
 export interface SourceVideo {
   id: string
@@ -10,6 +12,7 @@ export interface SourceVideo {
   opfsPath: string
   previewUrl: string
   duration: number
+  frameRate: number
   width: number
   height: number
   size: number
@@ -19,8 +22,9 @@ export interface GifSettings {
   fileName: string
   width: number
   fps: number
-  colors: number
-  loop: boolean
+  colorPreset: GifColorPreset
+  loopMode: GifLoopMode
+  loopCount: number
 }
 
 export interface GeneratedGif {
@@ -41,6 +45,7 @@ interface StudioState {
   source: SourceVideo | null
   thumbnails: TimelineThumbnail[]
   trimWindow: [number, number]
+  isTrimEnabled: boolean
   rangeInputMode: RangeInputMode
   isDurationLocked: boolean
   currentTime: number
@@ -56,6 +61,7 @@ interface StudioState {
   setSource: (source: SourceVideo | null) => void
   setThumbnails: (thumbnails: TimelineThumbnail[]) => void
   setTrimWindow: (trimWindow: [number, number]) => void
+  setTrimEnabled: (value: boolean) => void
   setRangeInputMode: (mode: RangeInputMode) => void
   setDurationLocked: (value: boolean) => void
   setCurrentTime: (currentTime: number) => void
@@ -74,14 +80,16 @@ const defaultSettings: GifSettings = {
   fileName: "untitled.gif",
   width: 480,
   fps: 12,
-  colors: 96,
-  loop: true,
+  colorPreset: "original",
+  loopMode: "infinite",
+  loopCount: 1,
 }
 
 export const useStudioStore = create<StudioState>((set) => ({
   source: null,
   thumbnails: [],
   trimWindow: [0, 3],
+  isTrimEnabled: false,
   rangeInputMode: "start-length",
   isDurationLocked: false,
   currentTime: 0,
@@ -97,6 +105,7 @@ export const useStudioStore = create<StudioState>((set) => ({
   setSource: (source) => set({ source }),
   setThumbnails: (thumbnails) => set({ thumbnails }),
   setTrimWindow: (trimWindow) => set({ trimWindow }),
+  setTrimEnabled: (isTrimEnabled) => set({ isTrimEnabled }),
   setRangeInputMode: (rangeInputMode) => set({ rangeInputMode }),
   setDurationLocked: (isDurationLocked) => set({ isDurationLocked }),
   setCurrentTime: (currentTime) => set({ currentTime }),

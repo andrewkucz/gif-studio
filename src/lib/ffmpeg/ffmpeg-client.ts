@@ -14,8 +14,11 @@ interface GenerateGifOptions {
   endTime: number
   width: number
   fps: number
-  colors: number
-  loop: boolean
+  paletteDither: "sierra2_4a" | "bayer"
+  paletteMaxColors: number
+  paletteStatsMode: "full" | "diff"
+  loopCount: number
+  loopMode: "infinite" | "count"
   onProgress?: (progress: number) => void
 }
 
@@ -55,8 +58,11 @@ class FFmpegClient {
     endTime,
     width,
     fps,
-    colors,
-    loop,
+    paletteDither,
+    paletteMaxColors,
+    paletteStatsMode,
+    loopCount,
+    loopMode,
     onProgress,
   }: GenerateGifOptions) {
     const ffmpeg = await this.getInstance()
@@ -75,8 +81,8 @@ class FFmpegClient {
 
       const filterGraph =
         `[0:v]fps=${fps},scale=${width}:-1:flags=lanczos,split[a][b];` +
-        `[a]palettegen=max_colors=${colors}:stats_mode=diff[p];` +
-        "[b][p]paletteuse=dither=bayer"
+        `[a]palettegen=max_colors=${paletteMaxColors}:stats_mode=${paletteStatsMode}[p];` +
+        `[b][p]paletteuse=dither=${paletteDither}`
 
       const args = [
         "-ss",
@@ -90,9 +96,10 @@ class FFmpegClient {
         "-an",
       ]
 
-      if (loop) {
-        args.push("-loop", "0")
-      }
+      const normalizedLoopCount = Math.max(1, Math.round(loopCount))
+      const ffmpegLoopValue =
+        loopMode === "infinite" ? 0 : normalizedLoopCount === 1 ? -1 : normalizedLoopCount - 1
+      args.push("-loop", `${ffmpegLoopValue}`)
 
       args.push(tempOutputName)
 

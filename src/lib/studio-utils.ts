@@ -1,4 +1,4 @@
-import type { GifSettings } from "@/state/studio-store"
+import type { GifColorPreset, GifSettings } from "@/state/studio-store"
 
 export const MIN_TRIM_DURATION = 0.1
 export type TimeDisplayFormat = "formatted" | "seconds" | "milliseconds" | "frames"
@@ -282,12 +282,88 @@ export function createOutputFileName(name: string) {
   return sanitized.endsWith(".gif") ? sanitized : `${sanitized}.gif`
 }
 
-export function buildDefaultSettings(fileName: string, sourceWidth: number): GifSettings {
+export function getMaxGifFrameRate(sourceFrameRate: number) {
+  if (!Number.isFinite(sourceFrameRate) || sourceFrameRate <= 0) {
+    return 24
+  }
+
+  return Math.max(1, Math.floor(sourceFrameRate))
+}
+
+export function formatFrameRate(frameRate: number) {
+  if (!Number.isFinite(frameRate) || frameRate <= 0) {
+    return "Unknown"
+  }
+
+  const decimals = Number.isInteger(frameRate) ? 0 : 1
+  return `${frameRate.toFixed(decimals)} fps`
+}
+
+export interface GifColorPresetOption {
+  value: GifColorPreset
+  label: string
+  description: string
+}
+
+interface GifColorPresetConfig {
+  maxColors: number
+  paletteStatsMode: "full" | "diff"
+  paletteDither: "sierra2_4a" | "bayer"
+}
+
+export const gifColorPresetOptions: GifColorPresetOption[] = [
+  {
+    value: "original",
+    label: "Original",
+    description: "Best color preservation and smoothest gradients. Largest files.",
+  },
+  {
+    value: "balanced",
+    label: "Balanced",
+    description: "A middle ground between color fidelity and file size.",
+  },
+  {
+    value: "compact",
+    label: "Compact",
+    description: "Smaller files with a more limited palette.",
+  },
+]
+
+export function getGifColorPresetConfig(colorPreset: GifColorPreset): GifColorPresetConfig {
+  switch (colorPreset) {
+    case "balanced":
+      return {
+        maxColors: 128,
+        paletteStatsMode: "diff",
+        paletteDither: "bayer",
+      }
+    case "compact":
+      return {
+        maxColors: 64,
+        paletteStatsMode: "diff",
+        paletteDither: "bayer",
+      }
+    case "original":
+    default:
+      return {
+        maxColors: 256,
+        paletteStatsMode: "full",
+        paletteDither: "sierra2_4a",
+      }
+  }
+}
+
+export function buildDefaultSettings(
+  fileName: string,
+  sourceWidth: number,
+  sourceFrameRate: number
+): GifSettings {
   return {
     fileName: createOutputFileName(fileName),
     width: clampNumber(Math.round(Math.min(sourceWidth, 480)), 160, Math.max(sourceWidth, 160)),
-    fps: 12,
-    colors: 96,
-    loop: true,
+    fps: Math.min(12, getMaxGifFrameRate(sourceFrameRate)),
+    colorPreset: "original",
+    loopMode: "infinite",
+    loopCount: 1,
   }
 }

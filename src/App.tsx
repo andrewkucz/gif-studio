@@ -35,15 +35,40 @@ import {
   createOutputFileName,
   formatBytes,
   formatDuration,
+  getGifColorPresetConfig,
+  getMaxGifFrameRate,
   getTrimDuration,
   getFileExtension,
 } from "@/lib/studio-utils"
 import { useStudioStore } from "@/state/studio-store"
 
+function getRemoteVideoName(url: string, contentType: string | null) {
+  const pathname = new URL(url).pathname
+  const pathSegment = pathname.split("/").filter(Boolean).at(-1)
+
+  if (pathSegment) {
+    return decodeURIComponent(pathSegment)
+  }
+
+  const normalizedType = contentType?.split(";")[0]?.trim().toLowerCase()
+  if (normalizedType === "video/webm") {
+    return "remote-video.webm"
+  }
+  if (normalizedType === "video/quicktime") {
+    return "remote-video.mov"
+  }
+  if (normalizedType === "video/mp4") {
+    return "remote-video.mp4"
+  }
+
+  return "remote-video.mp4"
+}
+
 function App() {
   const source = useStudioStore((state) => state.source)
   const thumbnails = useStudioStore((state) => state.thumbnails)
   const trimWindow = useStudioStore((state) => state.trimWindow)
+  const isTrimEnabled = useStudioStore((state) => state.isTrimEnabled)
   const rangeInputMode = useStudioStore((state) => state.rangeInputMode)
   const isDurationLocked = useStudioStore((state) => state.isDurationLocked)
   const currentTime = useStudioStore((state) => state.currentTime)
@@ -59,6 +84,7 @@ function App() {
   const setSource = useStudioStore((state) => state.setSource)
   const setCurrentTime = useStudioStore((state) => state.setCurrentTime)
   const setTrimWindow = useStudioStore((state) => state.setTrimWindow)
+  const setTrimEnabled = useStudioStore((state) => state.setTrimEnabled)
   const setRangeInputMode = useStudioStore((state) => state.setRangeInputMode)
   const setDurationLocked = useStudioStore((state) => state.setDurationLocked)
   const setSettings = useStudioStore((state) => state.setSettings)
@@ -74,7 +100,14 @@ function App() {
 
   const [opfsSupported, setOpfsSupported] = useState(true)
 
-  const selectionDuration = useMemo(() => getTrimDuration(trimWindow), [trimWindow])
+  const activeTrimWindow = useMemo<[number, number]>(
+    () => (source && !isTrimEnabled ? [0, source.duration] : trimWindow),
+    [isTrimEnabled, source, trimWindow]
+  )
+  const selectionDuration = useMemo(
+    () => (source ? (isTrimEnabled ? getTrimDuration(trimWindow) : source.duration) : 0),
+    [isTrimEnabled, source, trimWindow]
+  )
 
   const canGenerate = source !== null && selectionDuration > 0.1 && exportPhase !== "loading"
 
@@ -157,7 +190,7 @@ function App() {
     }
   }, [setError, setThumbnailState, setThumbnails, source])
 
-  const handleVideoSelected = useCallback(
+  const importVideoFile = useCallback(
     async (file: File) => {
       clearError()
       setImporting(true)
@@ -194,8 +227,10 @@ function App() {
         }
 
         const previewUrl = URL.createObjectURL(storedFile)
-        const defaultTrimEnd =
-          metadata.duration > 8 ? 6 : clampNumber(metadata.duration, 0.1, metadata.duration)
+        const shouldEnableTrim = metadata.duration > 10
+        const defaultTrimEnd = shouldEnableTrim
+          ? 6
+          : clampNumber(metadata.duration, 0.1, metadata.duration)
 
         setSource({
           id: assetId,
@@ -203,15 +238,17 @@ function App() {
           opfsPath,
           previewUrl,
           duration: metadata.duration,
+          frameRate: metadata.frameRate,
           width: metadata.width,
           height: metadata.height,
           size: file.size,
         })
         setTrimWindow([0, defaultTrimEnd])
+        setTrimEnabled(shouldEnableTrim)
         setRangeInputMode("start-length")
         setDurationLocked(false)
         setCurrentTime(0)
-        setSettings(buildDefaultSettings(file.name, metadata.width))
+        setSettings(buildDefaultSettings(file.name, metadata.width, metadata.frameRate))
         setThumbnails([])
         setOutput(null)
         setExportState({ phase: "idle", progress: 0 })
@@ -236,9 +273,73 @@ function App() {
       setRangeInputMode,
       setSettings,
       setSource,
+      setTrimEnabled,
       setThumbnails,
       setTrimWindow,
     ]
+  )
+
+  const handleVideoSelected = useCallback(
+    async (file: File) => {
+      await importVideoFile(file)
+    },
+    [importVideoFile]
+  )
+
+  const handleVideoUrlSelected = useCallback(
+    async (rawUrl: string) => {
+      const trimmedUrl = rawUrl.trim()
+
+      clearError()
+      setImporting(true)
+      setImportStatusMessage("Downloading video from URL...")
+
+      try {
+        const parsedUrl = new URL(trimmedUrl)
+        if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+          throw new Error("Enter a direct http:// or https:// video URL.")
+        }
+
+        let response: Response
+        try {
+          response = await fetch(parsedUrl.toString())
+        } catch {
+          throw new Error(
+            "Unable to download that video URL. Because this app runs entirely in your browser, the remote server must allow cross-origin requests (CORS). Try a direct video file URL that sends Access-Control-Allow-Origin, or download the video locally first."
+          )
+        }
+
+        if (!response.ok) {
+          throw new Error(
+            `Unable to download that video URL (${response.status} ${response.statusText || "request failed"}).`
+          )
+        }
+
+        const contentType = response.headers.get("content-type")
+        if (contentType?.toLowerCase().startsWith("text/html")) {
+          throw new Error(
+            "That URL returned an HTML page instead of a video file. Use a direct video file URL."
+          )
+        }
+
+        const downloadedBlob = await response.blob()
+        if (downloadedBlob.size === 0) {
+          throw new Error("The downloaded response was empty. Use a direct video file URL.")
+        }
+
+        const fileName = getRemoteVideoName(parsedUrl.toString(), downloadedBlob.type || contentType)
+        const file = new File([downloadedBlob], fileName, {
+          type: downloadedBlob.type || contentType || "video/mp4",
+        })
+
+        await importVideoFile(file)
+      } catch (error) {
+        setError(error instanceof Error ? error.message : "Unable to import that video URL.")
+        setImportStatusMessage(null)
+        setImporting(false)
+      }
+    },
+    [clearError, importVideoFile, setError, setImportStatusMessage, setImporting]
   )
 
   const handleGenerate = useCallback(async () => {
@@ -252,16 +353,21 @@ function App() {
     try {
       const sourceFile = await opfsRepository.readFile(source.opfsPath)
       const outputName = createOutputFileName(settings.fileName)
+      const cappedFps = clampNumber(settings.fps, 1, getMaxGifFrameRate(source.frameRate))
+      const colorPresetConfig = getGifColorPresetConfig(settings.colorPreset)
 
       const blob = await ffmpegClient.generateGif({
         sourceFile,
         outputName,
-        startTime: trimWindow[0],
-        endTime: trimWindow[1],
+        startTime: activeTrimWindow[0],
+        endTime: activeTrimWindow[1],
         width: settings.width,
-        fps: settings.fps,
-        colors: settings.colors,
-        loop: settings.loop,
+        fps: cappedFps,
+        paletteDither: colorPresetConfig.paletteDither,
+        paletteMaxColors: colorPresetConfig.maxColors,
+        paletteStatsMode: colorPresetConfig.paletteStatsMode,
+        loopCount: settings.loopCount,
+        loopMode: settings.loopMode,
         onProgress: (progress) => {
           setExportState({
             phase: "loading",
@@ -303,13 +409,14 @@ function App() {
     setError,
     setExportState,
     setOutput,
-    settings.colors,
+    settings.colorPreset,
     settings.fileName,
     settings.fps,
-    settings.loop,
+    settings.loopCount,
+    settings.loopMode,
     settings.width,
     source,
-    trimWindow,
+    activeTrimWindow,
   ])
 
   const storagePercent =
@@ -321,9 +428,10 @@ function App() {
     <>
       <GifSettingsForm
         duration={selectionDuration}
+        isTrimEnabled={isTrimEnabled}
         settings={settings}
         source={source}
-        trimWindow={trimWindow}
+        trimWindow={activeTrimWindow}
         onChange={setSettings}
       />
 
@@ -477,12 +585,14 @@ function App() {
               <StudioTimeline
                 currentTime={currentTime}
                 duration={source.duration}
-                frameRate={settings.fps}
+                frameRate={source.frameRate}
                 inputMode={rangeInputMode}
+                isTrimEnabled={isTrimEnabled}
                 isDurationLocked={isDurationLocked}
                 isLoading={isGeneratingThumbnails}
                 thumbnails={thumbnails}
                 trimWindow={trimWindow}
+                onTrimEnabledChange={setTrimEnabled}
                 onDurationLockChange={setDurationLocked}
                 onInputModeChange={setRangeInputMode}
                 onSeek={setCurrentTime}
@@ -495,6 +605,7 @@ function App() {
             <UploadDropzone
               disabled={isImporting}
               onSelect={handleVideoSelected}
+              onSelectUrl={handleVideoUrlSelected}
             />
           </main>
         )}
@@ -507,9 +618,11 @@ function App() {
                 Active clip: <span className="font-medium text-foreground">{source.name}</span>
               </p>
               <p>
-                Selected range:{" "}
+                {isTrimEnabled ? "Selected range: " : "Using full source: "}
                 <span className="font-medium text-foreground">
-                  {formatDuration(trimWindow[0])} → {formatDuration(trimWindow[1])}
+                  {isTrimEnabled
+                    ? `${formatDuration(activeTrimWindow[0])} → ${formatDuration(activeTrimWindow[1])}`
+                    : formatDuration(selectionDuration)}
                 </span>
               </p>
             </footer>
