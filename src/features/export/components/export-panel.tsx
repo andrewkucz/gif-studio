@@ -183,7 +183,7 @@ export function ExportPanel({
                   </div>
 
                   <FieldDescription>
-                    Choose the output frame width for the generated GIF.
+                    Output width for the generated GIF
                   </FieldDescription>
                 </div>
               ) : null}

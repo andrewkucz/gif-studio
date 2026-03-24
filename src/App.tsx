@@ -526,11 +526,10 @@ function App() {
         <header className="flex flex-col gap-4">
           <div className="space-y-2">
             <h1 className="font-heading text-4xl font-semibold tracking-tight text-foreground md:text-5xl">
-              GIF Studio
+              GIF Tree
             </h1>
             <p className="max-w-3xl text-sm text-muted-foreground md:text-base">
-              Upload a video, trim the exact window you want, preview timeline thumbnails,
-              and export a GIF without sending your file to a server.
+              Fully local GIF creation and trimming studio running in your browser.
             </p>
           </div>
         </header>
