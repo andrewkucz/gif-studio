@@ -13,7 +13,8 @@ export interface SourceVideo {
   name: string
   opfsPath: string
   previewUrl: string | null
-  isPreviewSupported: boolean
+  previewProxyOpfsPath: string | null
+  isNativePreviewSupported: boolean
   fileTypeLabel: string
   duration: number
   frameRate: number
@@ -63,6 +64,8 @@ interface StudioState {
   errorMessage: string | null
   isImporting: boolean
   importStatusMessage: string | null
+  isGeneratingPreviewProxy: boolean
+  previewProxyProgress: number
   isGeneratingThumbnails: boolean
   storageEstimate: StorageEstimateState | null
   setSource: (source: SourceVideo | null) => void
@@ -79,6 +82,7 @@ interface StudioState {
   clearError: () => void
   setImporting: (value: boolean) => void
   setImportStatusMessage: (message: string | null) => void
+  setPreviewProxyState: (state: { isGenerating: boolean; progress?: number }) => void
   setThumbnailState: (value: boolean) => void
   setStorageEstimate: (estimate: StorageEstimateState | null) => void
 }
@@ -110,6 +114,8 @@ export const useStudioStore = create<StudioState>((set) => ({
   errorMessage: null,
   isImporting: false,
   importStatusMessage: null,
+  isGeneratingPreviewProxy: false,
+  previewProxyProgress: 0,
   isGeneratingThumbnails: false,
   storageEstimate: null,
   setSource: (source) => set({ source }),
@@ -132,6 +138,8 @@ export const useStudioStore = create<StudioState>((set) => ({
   clearError: () => set({ errorMessage: null }),
   setImporting: (value) => set({ isImporting: value }),
   setImportStatusMessage: (message) => set({ importStatusMessage: message }),
+  setPreviewProxyState: ({ isGenerating, progress = 0 }) =>
+    set({ isGeneratingPreviewProxy: isGenerating, previewProxyProgress: progress }),
   setThumbnailState: (value) => set({ isGeneratingThumbnails: value }),
   setStorageEstimate: (estimate) => set({ storageEstimate: estimate }),
 }))

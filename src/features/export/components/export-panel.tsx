@@ -8,7 +8,6 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
@@ -444,17 +443,18 @@ export function ExportPanel({
                 The exact command that will be used to generate the GIF with the current settings.
               </DialogDescription>
             </DialogHeader>
-            <textarea
-              aria-label="FFmpeg command"
-              className="h-32 w-full resize-none rounded-lg border border-input bg-muted/30 px-3 py-2 font-mono text-xs text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-              readOnly
-              value={ffmpegCommand ?? ""}
-            />
-            <DialogFooter>
+            <div className="space-y-2">
+              <textarea
+                aria-label="FFmpeg command"
+                className="h-32 w-full resize-none rounded-lg border border-input bg-muted/30 px-3 py-2 font-mono text-xs text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                readOnly
+                value={ffmpegCommand ?? ""}
+              />
               <Button
                 size="sm"
                 type="button"
                 variant="outline"
+                className="ml-auto w-fit"
                 onClick={handleCopyCommand}
               >
                 {isCopied ? (
@@ -464,7 +464,7 @@ export function ExportPanel({
                 )}
                 {isCopied ? "Copied!" : "Copy to clipboard"}
               </Button>
-            </DialogFooter>
+            </div>
           </DialogContent>
         </Dialog>
 
@@ -489,12 +489,14 @@ export function ExportPanel({
             <div className="overflow-hidden rounded-xl border border-border/60 bg-background/60">
               <img alt="Generated GIF preview" className="w-full object-contain" src={output.url} />
             </div>
-            <div className="flex items-center justify-between text-sm">
-              <div>
-                <p className="font-medium text-foreground">{output.fileName}</p>
+            <div className="flex items-center gap-3 text-sm">
+              <div className="min-w-0 flex-1">
+                <p className="truncate font-medium text-foreground" title={output.fileName}>
+                  {output.fileName}
+                </p>
                 <p className="text-xs text-muted-foreground">{formatBytes(output.size)}</p>
               </div>
-              <Button asChild>
+              <Button asChild className="shrink-0">
                 <a download={output.fileName} href={output.url}>
                   <DownloadIcon data-icon="inline-start" />
                   Download

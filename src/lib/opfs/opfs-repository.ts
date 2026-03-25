@@ -1,4 +1,4 @@
-const DIRECTORY_NAMES = ["sources", "thumbs", "exports"] as const
+const DIRECTORY_NAMES = ["sources", "thumbs", "exports", "previews"] as const
 
 export type StudioDirectory = (typeof DIRECTORY_NAMES)[number]
 

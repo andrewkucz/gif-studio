@@ -29,6 +29,14 @@ interface ExtractThumbnailOptions {
   width: number
 }
 
+interface GeneratePreviewProxyOptions {
+  sourceFile: File
+  width: number
+  height: number
+  frameRate: number
+  onProgress?: (progress: number) => void
+}
+
 const METADATA_DURATION_PATTERN = /Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/
 const METADATA_VIDEO_SIZE_PATTERN = /(\d{2,5})x(\d{2,5})/
 const METADATA_VIDEO_FPS_PATTERN = /(\d+(?:\.\d+)?)\s(?:fps|tbr)\b/
@@ -269,6 +277,76 @@ class FFmpegClient {
         type: "image/jpeg",
       })
     } finally {
+      await Promise.allSettled([ffmpeg.deleteFile(inputName), ffmpeg.deleteFile(outputName)]).then(
+        (results) => {
+          results.forEach((result) => {
+            if (result.status === "rejected") {
+              console.error("FFmpeg cleanup error", result.reason)
+            }
+          })
+        }
+      )
+    }
+  }
+
+  async generatePreviewProxy({
+    sourceFile,
+    width,
+    height,
+    frameRate,
+    onProgress,
+  }: GeneratePreviewProxyOptions): Promise<Blob> {
+    const ffmpeg = await this.getInstance()
+    const extension = getFileExtension(sourceFile.name)
+    const inputName = `preview-${crypto.randomUUID()}.${extension || "mp4"}`
+    const outputName = `preview-${crypto.randomUUID()}.mp4`
+    const safeWidth = Math.max(Math.round(width), 1)
+    const safeHeight = Math.max(Math.round(height), 1)
+    const safeFrameRate = Math.max(frameRate, 1)
+    const progressHandler = ({ progress }: { progress: number }) => {
+      onProgress?.(clampNumber(progress, 0, 1))
+    }
+
+    ffmpeg.on("progress", progressHandler)
+
+    try {
+      await ffmpeg.writeFile(inputName, await fetchFile(sourceFile))
+      const exitCode = await ffmpeg.exec([
+        "-i",
+        inputName,
+        "-an",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "32",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        "-vf",
+        `fps=${safeFrameRate},scale=${safeWidth}:${safeHeight}:flags=fast_bilinear`,
+        outputName,
+      ])
+
+      if (exitCode !== 0) {
+        throw new Error("FFmpeg could not convert this source into a browser-preview video.")
+      }
+
+      const fileData = await ffmpeg.readFile(outputName)
+      if (!(fileData instanceof Uint8Array)) {
+        throw new Error("FFmpeg returned an unexpected preview-video payload.")
+      }
+
+      const safeBytes = new Uint8Array(fileData.byteLength)
+      safeBytes.set(fileData)
+
+      return new Blob([safeBytes], {
+        type: "video/mp4",
+      })
+    } finally {
+      ffmpeg.off("progress", progressHandler)
       await Promise.allSettled([ffmpeg.deleteFile(inputName), ffmpeg.deleteFile(outputName)]).then(
         (results) => {
           results.forEach((result) => {

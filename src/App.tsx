@@ -7,7 +7,7 @@ import {
 import packageJson from "../package.json"
 
 import { ExportPanel } from "@/features/export/components/export-panel"
-import { VideoPlayer } from "@/features/player/components/video-player"
+import { VideoPlayer, type TrimPlaybackRequest } from "@/features/player/components/video-player"
 import { StudioTimeline } from "@/features/timeline/components/timeline"
 import { UploadDropzone } from "@/features/upload/components/upload-dropzone"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -77,6 +77,8 @@ function App() {
   const errorMessage = useStudioStore((state) => state.errorMessage)
   const isImporting = useStudioStore((state) => state.isImporting)
   const importStatusMessage = useStudioStore((state) => state.importStatusMessage)
+  const isGeneratingPreviewProxy = useStudioStore((state) => state.isGeneratingPreviewProxy)
+  const previewProxyProgress = useStudioStore((state) => state.previewProxyProgress)
   const isGeneratingThumbnails = useStudioStore((state) => state.isGeneratingThumbnails)
   const storageEstimate = useStudioStore((state) => state.storageEstimate)
   const setSource = useStudioStore((state) => state.setSource)
@@ -90,6 +92,7 @@ function App() {
   const setThumbnailState = useStudioStore((state) => state.setThumbnailState)
   const setImporting = useStudioStore((state) => state.setImporting)
   const setImportStatusMessage = useStudioStore((state) => state.setImportStatusMessage)
+  const setPreviewProxyState = useStudioStore((state) => state.setPreviewProxyState)
   const setExportState = useStudioStore((state) => state.setExportState)
   const setOutput = useStudioStore((state) => state.setOutput)
   const setError = useStudioStore((state) => state.setError)
@@ -97,6 +100,8 @@ function App() {
   const clearError = useStudioStore((state) => state.clearError)
 
   const [opfsSupported, setOpfsSupported] = useState(true)
+  const [isTrimPlaybackLoopEnabled, setIsTrimPlaybackLoopEnabled] = useState(false)
+  const [trimPlaybackRequest, setTrimPlaybackRequest] = useState<TrimPlaybackRequest | null>(null)
 
   const activeTrimWindow = useMemo<[number, number]>(
     () => (source && !isTrimEnabled ? [0, source.duration] : trimWindow),
@@ -108,6 +113,10 @@ function App() {
   )
 
   const canGenerate = source !== null && selectionDuration > 0.1 && exportPhase !== "loading"
+
+  useEffect(() => {
+    setTrimPlaybackRequest(null)
+  }, [source?.id])
 
   const refreshStorageEstimate = useCallback(async () => {
     try {
@@ -156,7 +165,7 @@ function App() {
           assetId: source.id,
           sourceFile,
           sourceHeight: source.height,
-          sourceUrl: source.isPreviewSupported ? source.previewUrl : null,
+          sourceUrl: source.isNativePreviewSupported ? source.previewUrl : null,
           sourceWidth: source.width,
           duration: source.duration,
           count: 10,
@@ -208,6 +217,9 @@ function App() {
         if (currentState.source?.previewUrl) {
           URL.revokeObjectURL(currentState.source.previewUrl)
         }
+        if (currentState.source?.previewProxyOpfsPath) {
+          await opfsRepository.deleteFile(currentState.source.previewProxyOpfsPath)
+        }
         currentState.thumbnails.forEach((thumbnail) => URL.revokeObjectURL(thumbnail.url))
         if (currentState.output) {
           URL.revokeObjectURL(currentState.output.url)
@@ -219,14 +231,14 @@ function App() {
         const opfsPath = await opfsRepository.writeFile("sources", sourceFileName, file)
         const storedFile = await opfsRepository.readFile(opfsPath)
         let metadata = await probePlayableVideo(storedFile)
-        const isPreviewSupported = metadata !== null
+        const isNativePreviewSupported = metadata !== null
 
         if (!metadata) {
           setImportStatusMessage("Reading video details with FFmpeg...")
           metadata = await ffmpegClient.readVideoMetadata(storedFile)
         }
 
-        const previewUrl = isPreviewSupported ? URL.createObjectURL(storedFile) : null
+        const previewUrl = isNativePreviewSupported ? URL.createObjectURL(storedFile) : null
         const shouldEnableTrim = metadata.duration > 10
         const defaultTrimEnd = shouldEnableTrim
           ? 6
@@ -237,8 +249,9 @@ function App() {
           name: file.name,
           opfsPath,
           fileTypeLabel: getFileTypeLabel(file.name),
-          isPreviewSupported,
+          isNativePreviewSupported,
           previewUrl,
+          previewProxyOpfsPath: null,
           duration: metadata.duration,
           frameRate: metadata.frameRate,
           width: metadata.width,
@@ -259,7 +272,7 @@ function App() {
         setError(error instanceof Error ? error.message : "Unable to import that video.")
       } finally {
         setImportStatusMessage(null)
-        setImporting(false)
+      setImporting(false)
       }
     },
     [
@@ -280,6 +293,83 @@ function App() {
       setTrimWindow,
     ]
   )
+
+  const handleGeneratePreviewProxy = useCallback(async () => {
+    const currentSource = useStudioStore.getState().source
+    if (!currentSource || currentSource.isNativePreviewSupported || currentSource.previewProxyOpfsPath) {
+      return
+    }
+
+    clearError()
+    setPreviewProxyState({ isGenerating: true, progress: 0 })
+    let previewPath: string | null = null
+
+    try {
+      const sourceFile = await opfsRepository.readFile(currentSource.opfsPath)
+      const previewBlob = await ffmpegClient.generatePreviewProxy({
+        sourceFile,
+        width: currentSource.width,
+        height: currentSource.height,
+        frameRate: currentSource.frameRate,
+        onProgress: (progress) => {
+          const ffmpegStageProgress = Math.floor(clampNumber(progress, 0, 1) * 92)
+          setPreviewProxyState({
+            isGenerating: true,
+            progress: ffmpegStageProgress,
+          })
+        },
+      })
+      setPreviewProxyState({ isGenerating: true, progress: 94 })
+      previewPath = await opfsRepository.writeFile(
+        "previews",
+        `${currentSource.id}-preview.mp4`,
+        previewBlob
+      )
+      setPreviewProxyState({ isGenerating: true, progress: 96 })
+      const previewFile = await opfsRepository.readFile(previewPath)
+      const previewMetadata = await probePlayableVideo(previewFile)
+
+      if (!previewMetadata) {
+        await opfsRepository.deleteFile(previewPath)
+        throw new Error("The converted preview video could not be played in this browser.")
+      }
+
+      const activeSource = useStudioStore.getState().source
+      const previewUrl = URL.createObjectURL(previewFile)
+
+      if (!activeSource || activeSource.id !== currentSource.id) {
+        URL.revokeObjectURL(previewUrl)
+        await opfsRepository.deleteFile(previewPath)
+        return
+      }
+
+      if (activeSource.previewUrl) {
+        URL.revokeObjectURL(activeSource.previewUrl)
+      }
+      if (activeSource.previewProxyOpfsPath) {
+        await opfsRepository.deleteFile(activeSource.previewProxyOpfsPath)
+      }
+
+      setPreviewProxyState({ isGenerating: true, progress: 98 })
+      setSource({
+        ...activeSource,
+        previewUrl,
+        previewProxyOpfsPath: previewPath,
+      })
+      await refreshStorageEstimate()
+    } catch (error) {
+      if (previewPath) {
+        await opfsRepository.deleteFile(previewPath).catch(() => undefined)
+      }
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Unable to convert this source into a browser-preview video."
+      )
+    } finally {
+      setPreviewProxyState({ isGenerating: false, progress: 0 })
+    }
+  }, [clearError, refreshStorageEstimate, setError, setPreviewProxyState, setSource])
 
   const handleVideoSelected = useCallback(
     async (file: File) => {
@@ -342,6 +432,19 @@ function App() {
       }
     },
     [clearError, importVideoFile, setError, setImportStatusMessage, setImporting]
+  )
+
+  const handlePlayTrimSelection = useCallback(
+    ({ start, end, loop }: { start: number; end: number; loop: boolean }) => {
+      setCurrentTime(start)
+      setTrimPlaybackRequest((currentRequest) => ({
+        requestId: (currentRequest?.requestId ?? 0) + 1,
+        start,
+        end,
+        loop,
+      }))
+    },
+    [setCurrentTime]
   )
 
   const handleGenerate = useCallback(async () => {
@@ -583,23 +686,32 @@ function App() {
             <section className="flex min-w-0 flex-col gap-6 xl:col-start-1 xl:row-start-1">
               <VideoPlayer
                 currentTime={currentTime}
+                isGeneratingPreviewProxy={isGeneratingPreviewProxy}
+                isTrimPlaybackLoopEnabled={isTrimPlaybackLoopEnabled}
+                previewProxyProgress={previewProxyProgress}
                 source={source}
+                trimPlaybackRequest={trimPlaybackRequest}
+                onGeneratePreviewProxy={handleGeneratePreviewProxy}
                 onTimeChange={setCurrentTime}
               />
 
               <StudioTimeline
+                canPlaySelection={Boolean(source.previewUrl)}
                 currentTime={currentTime}
                 duration={source.duration}
                 frameRate={source.frameRate}
                 inputMode={rangeInputMode}
                 isTrimEnabled={isTrimEnabled}
                 isDurationLocked={isDurationLocked}
+                isTrimPlaybackLoopEnabled={isTrimPlaybackLoopEnabled}
                 isLoading={isGeneratingThumbnails}
                 thumbnails={thumbnails}
                 trimWindow={trimWindow}
                 onTrimEnabledChange={setTrimEnabled}
                 onDurationLockChange={setDurationLocked}
                 onInputModeChange={setRangeInputMode}
+                onTrimPlaybackLoopEnabledChange={setIsTrimPlaybackLoopEnabled}
+                onPlaySelection={handlePlayTrimSelection}
                 onSeek={setCurrentTime}
                 onTrimChange={setTrimWindow}
               />

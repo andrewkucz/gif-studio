@@ -32,18 +32,22 @@ import { cn } from "@/lib/utils"
 import { FrameStrip } from "./frame-strip"
 
 interface StudioTimelineProps {
+  canPlaySelection: boolean
   currentTime: number
   duration: number
   frameRate: number
   inputMode: RangeInputMode
   isTrimEnabled: boolean
   isDurationLocked: boolean
+  isTrimPlaybackLoopEnabled: boolean
   isLoading: boolean
   thumbnails: TimelineThumbnail[]
   trimWindow: [number, number]
   onTrimEnabledChange: (value: boolean) => void
   onDurationLockChange: (value: boolean) => void
   onInputModeChange: (mode: RangeInputMode) => void
+  onTrimPlaybackLoopEnabledChange: (value: boolean) => void
+  onPlaySelection: (selection: { start: number; end: number; loop: boolean }) => void
   onSeek: (time: number) => void
   onTrimChange: (window: [number, number]) => void
 }
@@ -234,18 +238,22 @@ function TimelineTimeField({
 }
 
 export function StudioTimeline({
+  canPlaySelection,
   currentTime,
   duration,
   frameRate,
   inputMode,
   isTrimEnabled,
   isDurationLocked,
+  isTrimPlaybackLoopEnabled,
   isLoading,
   thumbnails,
   trimWindow,
   onTrimEnabledChange,
   onDurationLockChange,
   onInputModeChange,
+  onTrimPlaybackLoopEnabledChange,
+  onPlaySelection,
   onSeek,
   onTrimChange,
 }: StudioTimelineProps) {
@@ -543,7 +551,7 @@ export function StudioTimeline({
               </div>
             </div>
 
-            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <label className="flex items-center gap-2 text-sm text-foreground">
                 <Checkbox
                   checked={isDurationLocked}
@@ -552,6 +560,32 @@ export function StudioTimeline({
                 />
                 <span>Lock duration</span>
               </label>
+              {canPlaySelection ? (
+                <div className="flex flex-wrap items-center justify-end gap-3">
+                  <Button
+                    disabled={selectionDuration <= 0}
+                    type="button"
+                    variant="secondary"
+                    onClick={() =>
+                      onPlaySelection({
+                      start: trimWindow[0],
+                      end: trimWindow[1],
+                      loop: isTrimPlaybackLoopEnabled,
+                    })
+                  }
+                >
+                  Play preview
+                </Button>
+                <label className="flex items-center gap-2 text-sm text-foreground">
+                  <Checkbox
+                    checked={isTrimPlaybackLoopEnabled}
+                    id="loop-selection-playback"
+                    onCheckedChange={(checked) => onTrimPlaybackLoopEnabledChange(checked === true)}
+                  />
+                  <span>Loop</span>
+                </label>
+                </div>
+              ) : null}
             </div>
 
             <div className="grid gap-3 md:grid-cols-2">
