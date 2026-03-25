@@ -511,6 +511,54 @@ export function estimateGifSizeBytes({
   )
 }
 
+export interface BuildFfmpegCommandOptions {
+  startTime: number
+  endTime: number
+  width: number
+  fps: number
+  paletteDither: "sierra2_4a" | "bayer"
+  paletteMaxColors: number
+  paletteStatsMode: "full" | "diff"
+  loopMode: "infinite" | "count"
+  loopCount: number
+  inputFileName?: string
+  outputFileName?: string
+}
+
+export function buildFfmpegCommand({
+  startTime,
+  endTime,
+  width,
+  fps,
+  paletteDither,
+  paletteMaxColors,
+  paletteStatsMode,
+  loopMode,
+  loopCount,
+  inputFileName = "input.mp4",
+  outputFileName = "output.gif",
+}: BuildFfmpegCommandOptions): string {
+  const duration = Math.max(endTime - startTime, 0.1)
+  const filterGraph =
+    `[0:v]fps=${fps},scale=${width}:-1:flags=lanczos,split[a][b];` +
+    `[a]palettegen=max_colors=${paletteMaxColors}:stats_mode=${paletteStatsMode}[p];` +
+    `[b][p]paletteuse=dither=${paletteDither}`
+  const normalizedLoopCount = Math.max(1, Math.round(loopCount))
+  const ffmpegLoopValue =
+    loopMode === "infinite" ? 0 : normalizedLoopCount === 1 ? -1 : normalizedLoopCount - 1
+
+  return [
+    "ffmpeg",
+    "-ss", startTime.toFixed(2),
+    "-t", duration.toFixed(2),
+    "-i", inputFileName,
+    "-filter_complex", `"${filterGraph}"`,
+    "-an",
+    "-loop", `${ffmpegLoopValue}`,
+    outputFileName,
+  ].join(" ")
+}
+
 export function buildDefaultSettings(
   fileName: string,
   sourceWidth: number,

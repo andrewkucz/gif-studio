@@ -572,6 +572,8 @@ function App() {
                 progress={exportProgress}
                 settings={settings}
                 selectionDuration={selectionDuration}
+                selectionStart={activeTrimWindow[0]}
+                selectionEnd={activeTrimWindow[1]}
                 source={source}
                 onGenerate={handleGenerate}
                 onSettingsChange={setSettings}
