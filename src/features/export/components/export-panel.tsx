@@ -1,9 +1,23 @@
 import { useState } from "react"
-import { ChevronDownIcon, DownloadIcon, LoaderCircleIcon, WandSparklesIcon } from "lucide-react"
+import { CheckIcon, ChevronDownIcon, ClipboardIcon, DownloadIcon, LoaderCircleIcon, TerminalIcon, WandSparklesIcon } from "lucide-react"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import {
   InputGroup,
@@ -16,6 +30,7 @@ import { cn } from "@/lib/utils"
 import {
   GIF_CUSTOM_COLOR_MAX,
   GIF_CUSTOM_COLOR_MIN,
+  buildFfmpegCommand,
   clampNumber,
   convertGifCustomSizeValue,
   estimateGifSizeBytes,
@@ -37,6 +52,8 @@ interface ExportPanelProps {
   progress: number
   settings: GifSettings
   selectionDuration: number
+  selectionStart: number
+  selectionEnd: number
   source: SourceVideo | null
   onSettingsChange: (settings: Partial<GifSettings>) => void
   onGenerate: () => void
@@ -50,12 +67,16 @@ export function ExportPanel({
   progress,
   settings,
   selectionDuration,
+  selectionStart,
+  selectionEnd,
   source,
   onSettingsChange,
   onGenerate,
 }: ExportPanelProps) {
   const isBusy = phase === "loading" || phase === "saving"
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false)
+  const [isFfmpegDialogOpen, setIsFfmpegDialogOpen] = useState(false)
+  const [isCopied, setIsCopied] = useState(false)
   const maxGifFps = source ? getMaxGifFrameRate(source.frameRate) : 24
   const activeColorPreset = gifColorPresetOptions.find((option) => option.value === settings.colorPreset)
   const activeColorConfig = getGifColorPresetConfig(settings.colorPreset, settings.customColorCount)
@@ -79,6 +100,30 @@ export function ExportPanel({
           sizeUnit: settings.sizeUnit,
         })
       : 0
+
+  const ffmpegCommand = source
+    ? buildFfmpegCommand({
+        startTime: selectionStart,
+        endTime: selectionEnd,
+        width: outputWidth,
+        fps: settings.fps,
+        paletteDither: activeColorConfig.paletteDither,
+        paletteMaxColors: activeColorConfig.maxColors,
+        paletteStatsMode: activeColorConfig.paletteStatsMode,
+        loopMode: settings.loopMode,
+        loopCount: settings.loopCount,
+        inputFileName: source.name,
+        outputFileName: settings.fileName,
+      })
+    : null
+
+  function handleCopyCommand() {
+    if (!ffmpegCommand) return
+    void navigator.clipboard.writeText(ffmpegCommand).then(() => {
+      setIsCopied(true)
+      setTimeout(() => setIsCopied(false), 2000)
+    })
+  }
 
   return (
     <Card className="border-border/70 bg-card/85 shadow-2xl shadow-black/10 backdrop-blur">
@@ -357,14 +402,71 @@ export function ExportPanel({
           </p>
         ) : null}
 
-        <Button className="w-full" disabled={!canGenerate || isBusy} onClick={onGenerate}>
-          {isBusy ? (
-            <LoaderCircleIcon className="animate-spin" data-icon="inline-start" />
-          ) : (
-            <WandSparklesIcon data-icon="inline-start" />
-          )}
-          {isBusy ? "Generating..." : "Generate GIF"}
-        </Button>
+        <div className="flex gap-2">
+          <Button className="min-w-0 flex-1" disabled={!canGenerate || isBusy} onClick={onGenerate}>
+            {isBusy ? (
+              <LoaderCircleIcon className="animate-spin" data-icon="inline-start" />
+            ) : (
+              <WandSparklesIcon data-icon="inline-start" />
+            )}
+            {isBusy ? "Generating..." : "Generate GIF"}
+          </Button>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                aria-label="More options"
+                disabled={!source}
+                size="icon"
+                type="button"
+                variant="outline"
+              >
+                <ChevronDownIcon />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                disabled={!ffmpegCommand}
+                onSelect={() => setIsFfmpegDialogOpen(true)}
+              >
+                <TerminalIcon className="text-muted-foreground" />
+                View FFmpeg command
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+
+        <Dialog open={isFfmpegDialogOpen} onOpenChange={setIsFfmpegDialogOpen}>
+          <DialogContent className="sm:max-w-lg">
+            <DialogHeader>
+              <DialogTitle>FFmpeg command</DialogTitle>
+              <DialogDescription>
+                The exact command that will be used to generate the GIF with the current settings.
+              </DialogDescription>
+            </DialogHeader>
+            <textarea
+              aria-label="FFmpeg command"
+              className="h-32 w-full resize-none rounded-lg border border-input bg-muted/30 px-3 py-2 font-mono text-xs text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+              readOnly
+              value={ffmpegCommand ?? ""}
+            />
+            <DialogFooter>
+              <Button
+                size="sm"
+                type="button"
+                variant="outline"
+                onClick={handleCopyCommand}
+              >
+                {isCopied ? (
+                  <CheckIcon data-icon="inline-start" />
+                ) : (
+                  <ClipboardIcon data-icon="inline-start" />
+                )}
+                {isCopied ? "Copied!" : "Copy to clipboard"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {isBusy ? (
           <div className="space-y-2">
